@@ -23,6 +23,7 @@ ORIGINAL_FILE = ROOT / ORIGINAL_FILE_NAME
 REVISED_FILE = ROOT / REVISED_FILE_NAME
 STATE_FILE = DATA_ROOT / ".prome-law-state.json"
 EDIT_TOKEN_FILE = DATA_ROOT / ".prome-law-edit-token"
+SEED_STATE_FILE = ROOT / "seed-state.json"
 
 state_condition = threading.Condition()
 server_revision = 0
@@ -135,12 +136,26 @@ def initial_payload():
     }
 
 
+def load_seed_payload():
+    if not SEED_STATE_FILE.exists():
+        return None
+    try:
+        payload = normalize_payload(json.loads(SEED_STATE_FILE.read_text(encoding="utf-8")))
+    except json.JSONDecodeError:
+        return None
+    payload["serverRevision"] = int(payload.get("serverRevision") or 0)
+    return payload
+
+
 def load_state_payload():
     if STATE_FILE.exists():
         try:
             return normalize_payload(json.loads(STATE_FILE.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             pass
+    seed_payload = load_seed_payload()
+    if seed_payload:
+        return seed_payload
     return initial_payload()
 
 

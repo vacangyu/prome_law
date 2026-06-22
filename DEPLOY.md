@@ -29,6 +29,16 @@ docker build -t promelaw .
 docker run -p 5173:8000 -v promelaw-data:/data -e PROME_LAW_EDIT_TOKEN='긴_비밀_토큰' promelaw
 ```
 
+## 첫 부팅 데이터
+
+`seed-state.json`은 Render의 persistent disk가 비어 있을 때 첫 상태로 사용된다. 따라서 md 파일이 GitHub에 누락되어도 서버는 이 JSON으로 부팅할 수 있다.
+
+최신 작업환경으로 시드를 바꾸려면:
+
+```bash
+cp ~/Documents/prome-law.workspace.20260623-071406.json ./seed-state.json
+```
+
 ## 도메인 연결
 
 도메인은 viewer인 `/`로 연결한다. edit 주소는 공개 링크에 노출하지 말고, 편집자에게만 `/edit/<토큰>` 전체 주소를 공유한다.

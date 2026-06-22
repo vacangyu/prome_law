@@ -382,11 +382,31 @@ function normalizeSplitRatio(value) {
 }
 
 async function loadDocuments() {
+  if (REALTIME_ENABLED) {
+    const payload = await fetchInitialDocumentPayload();
+    if (payload && applyDocumentPayload(payload)) {
+      updateFileStatus();
+      return;
+    }
+  }
   state.originalText = await fetchTextFile(ORIGINAL_FILE);
   state.revisedText = await fetchTextFile(REVISED_FILE);
   state.originalDoc = parseDocument(state.originalText, "original");
   state.revisedDoc = parseDocument(state.revisedText, "revised");
   updateFileStatus();
+}
+
+async function fetchInitialDocumentPayload() {
+  try {
+    const response = await fetch("/api/state", {
+      cache: "no-store",
+      headers: getEditRequestHeaders(),
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
 }
 
 function updateFileStatus() {
