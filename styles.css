@@ -2846,6 +2846,20 @@ body.is-present-mode .alignment-board {
   }
 }
 
+body.is-printing-layout .law-text {
+  font-size: 8.5pt;
+}
+
+body.is-printing-layout .law-line {
+  min-height: 16pt;
+  transition: none !important;
+}
+
+body.is-printing-layout .law-line-content,
+body.is-printing-layout .law-line-number {
+  line-height: 16pt;
+}
+
 @media print {
   @page {
     size: A4 portrait;

@@ -140,6 +140,8 @@ const renderLineNumbers = {
 let lineBondLayoutFrame = 0;
 let lineBondLayoutSaveTimer = 0;
 let viewportGeometryFrame = 0;
+let printLayoutFrame = 0;
+let printMediaListenerBound = false;
 let isApplyingRemoteState = false;
 let remoteSaveTimer = 0;
 let remoteSaveInFlight = false;
@@ -234,6 +236,7 @@ function bindEvents() {
   window.addEventListener("blur", cleanupTransientDragState);
   window.visualViewport?.addEventListener("resize", scheduleViewportGeometrySync);
   window.visualViewport?.addEventListener("scroll", scheduleViewportGeometrySync);
+  bindPrintLayoutEvents();
   bindColumnDividerEvents();
   document.addEventListener("pointermove", syncDesktopHighlightHoverPreview);
   if (IS_PRESENT_MODE) {
@@ -347,11 +350,54 @@ function openPresentationPage() {
 function maybeAutoPrintViewer() {
   if (IS_EDIT_MODE || IS_PRESENT_MODE) return;
   if (!isPrintView()) return;
-  window.setTimeout(() => window.print(), 450);
+  window.setTimeout(() => {
+    preparePrintLayout();
+    window.setTimeout(() => window.print(), 140);
+  }, 450);
 }
 
 function isPrintView() {
   return new URLSearchParams(window.location.search).has("print");
+}
+
+function bindPrintLayoutEvents() {
+  window.addEventListener("beforeprint", preparePrintLayout);
+  window.addEventListener("afterprint", restoreScreenLayoutAfterPrint);
+  const media = window.matchMedia?.("print");
+  if (!media || printMediaListenerBound) return;
+  printMediaListenerBound = true;
+  const handlePrintMediaChange = (event) => {
+    if (event.matches) {
+      preparePrintLayout();
+    } else {
+      restoreScreenLayoutAfterPrint();
+    }
+  };
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", handlePrintMediaChange);
+  } else if (typeof media.addListener === "function") {
+    media.addListener(handlePrintMediaChange);
+  }
+}
+
+function preparePrintLayout() {
+  document.body.classList.add("is-printing-layout");
+  void document.body.offsetHeight;
+  refreshAllLineBonds({ persist: false, forceDesktop: true });
+  if (printLayoutFrame) cancelAnimationFrame(printLayoutFrame);
+  printLayoutFrame = requestAnimationFrame(() => {
+    printLayoutFrame = 0;
+    refreshAllLineBonds({ persist: false, forceDesktop: true });
+  });
+}
+
+function restoreScreenLayoutAfterPrint() {
+  if (printLayoutFrame) {
+    cancelAnimationFrame(printLayoutFrame);
+    printLayoutFrame = 0;
+  }
+  document.body.classList.remove("is-printing-layout");
+  if (state.revisedDoc) renderAll();
 }
 
 function handleHighlightSelection() {
@@ -621,6 +667,14 @@ function isMobileBondLayoutViewport() {
 
 function isMobileBondLayoutActive() {
   return state.mobileBondLayout || isMobileBondLayoutViewport();
+}
+
+function isPrintLayoutActive() {
+  return isPrintView() || document.body.classList.contains("is-printing-layout");
+}
+
+function shouldUseLineBondLayout(options = {}) {
+  return Boolean(options.forceDesktop || isPrintLayoutActive() || !isMobileBondLayoutActive());
 }
 
 function bindColumnDividerEvents() {
@@ -1740,7 +1794,7 @@ function renderSaveIcon() {
 }
 
 function renderLawLines(lines, statuses = [], options = {}) {
-  const ignoreBondLayout = isMobileBondLayoutActive();
+  const ignoreBondLayout = !shouldUseLineBondLayout();
   return lines.map((line, index) => {
     const rendered = statuses[index] || {
       className: line.trim() ? "" : "line-muted",
@@ -3104,11 +3158,17 @@ function snapToLineUnit(value, unit = getLineHeightUnit()) {
 }
 
 function getLineHeightUnit() {
+  const sample = document.querySelector(IS_PRESENT_MODE ? ".presentation-cells .law-line-content" : "#alignmentBoard .law-line-content");
+  const renderedLineHeight = Number.parseFloat(sample ? getComputedStyle(sample).lineHeight : "");
+  if (Number.isFinite(renderedLineHeight) && renderedLineHeight > 0) return renderedLineHeight;
+
   const source = IS_PRESENT_MODE
     ? document.querySelector(".presentation-cells") || document.documentElement
     : document.documentElement;
-  const value = Number.parseFloat(getComputedStyle(source).getPropertyValue("--law-line-step"));
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_LINE_HEIGHT_UNIT;
+  const rawValue = getComputedStyle(source).getPropertyValue("--law-line-step").trim();
+  const value = Number.parseFloat(rawValue);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_LINE_HEIGHT_UNIT;
+  return rawValue.endsWith("pt") ? value * (96 / 72) : value;
 }
 
 function handleLineNumberPointerDown(event) {
@@ -3377,7 +3437,7 @@ function getBondedLineKeys(lineKey) {
 
 function applyLineBondClasses() {
   document.querySelectorAll(".law-line.is-line-bonded").forEach((line) => line.classList.remove("is-line-bonded"));
-  if (isMobileBondLayoutActive()) return;
+  if (!shouldUseLineBondLayout()) return;
   state.lineBonds.forEach((bond) => {
     [bond.leftKey, bond.rightKey].forEach((lineKey) => {
       findRenderedLine(lineKey)?.classList.add("is-line-bonded");
@@ -3404,7 +3464,7 @@ function scheduleLineBondLayoutRefresh(options = {}) {
 
 function refreshAllLineBonds(options = {}) {
   const shouldPersist = options.persist !== false;
-  if (isMobileBondLayoutActive()) {
+  if (!shouldUseLineBondLayout(options)) {
     clearRenderedLineLayoutAdjustments();
     applyLineBondClasses();
     return;
@@ -3990,7 +4050,7 @@ function getUnassignedOriginalArticles() {
 }
 
 function getSavedLineHeight(lineKey) {
-  if (isMobileBondLayoutActive()) return null;
+  if (!shouldUseLineBondLayout()) return null;
   const unit = DEFAULT_LINE_HEIGHT_UNIT;
   const height = Number(state.lineHeights?.[lineKey]);
   if (!Number.isFinite(height) || height <= unit) return null;
@@ -3998,7 +4058,7 @@ function getSavedLineHeight(lineKey) {
 }
 
 function getSavedLineOffset(lineKey) {
-  if (isMobileBondLayoutActive()) return null;
+  if (!shouldUseLineBondLayout()) return null;
   const offset = Number(state.lineOffsets?.[lineKey]);
   return Number.isFinite(offset) && offset > 0 ? Math.round(offset * getLineLayoutScale()) : null;
 }
