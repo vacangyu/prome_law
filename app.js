@@ -1058,7 +1058,27 @@ function renderPresentation() {
 }
 
 function getPresentationNotes() {
-  return state.annotations.filter((note) => note.kind !== "댓글" && note.isPublic !== false);
+  const targetRank = getPresentationTargetRank();
+  return state.annotations
+    .filter((note) => note.kind !== "댓글" && note.isPublic !== false)
+    .map((note, index) => ({
+      note,
+      index,
+      rank: targetRank.has(note.targetId) ? targetRank.get(note.targetId) : Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((first, second) => first.rank - second.rank || first.index - second.index)
+    .map((entry) => entry.note);
+}
+
+function getPresentationTargetRank() {
+  const orderedTargets = [TITLE_REVISED_ID];
+  (state.revisedDoc?.articles || []).forEach((article) => {
+    getDeletedRowsBefore(article.id).forEach((row) => {
+      orderedTargets.push(getDeletedRowNoteTarget(row.id));
+    });
+    orderedTargets.push(article.id);
+  });
+  return new Map(orderedTargets.map((targetId, index) => [targetId, index]));
 }
 
 function setPresentationProgress(progress) {
