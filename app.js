@@ -230,6 +230,7 @@ function cacheElements() {
 function bindEvents() {
   window.addEventListener("resize", handleWindowResize);
   window.addEventListener("orientationchange", scheduleViewportGeometrySync);
+  window.addEventListener("blur", cleanupTransientDragState);
   window.visualViewport?.addEventListener("resize", scheduleViewportGeometrySync);
   window.visualViewport?.addEventListener("scroll", scheduleViewportGeometrySync);
   bindColumnDividerEvents();
@@ -272,6 +273,11 @@ function bindEvents() {
       renderBoard();
     });
   });
+}
+
+function cleanupTransientDragState() {
+  cleanupLineNumberPointerDrag();
+  cleanupAnnotationDrag();
 }
 
 function handlePresentationKeydown(event) {
@@ -1447,9 +1453,12 @@ function renderAnnotationEntry(note, activeComposer = null, closingComposer = nu
 function renderAnnotationItem(note) {
   const isOpen = state.noteComposer?.editingId === note.id || state.noteComposerClosing?.editingId === note.id;
   const bodyClass = `annotation-body ${isAnnotationBodyEmpty(note) ? "is-placeholder" : ""}`;
+  const itemDragAttributes = IS_EDIT_MODE && !isOpen
+    ? ` draggable="true" data-drag-annotation="${escapeAttribute(note.id)}" data-drag-annotation-target="${escapeAttribute(note.targetId)}"`
+    : "";
   if (note.kind === "댓글") {
     return `
-      <article class="annotation-item annotation-comment ${isOpen ? "is-open" : ""}" data-annotation-id="${escapeAttribute(note.id)}">
+      <article class="annotation-item annotation-comment ${isOpen ? "is-open" : ""}" data-annotation-id="${escapeAttribute(note.id)}"${itemDragAttributes}>
         ${renderAnnotationDragHandle(note)}
         ${renderAnnotationKindText(note)}
         <span class="${bodyClass}">${escapeHtml(annotationBodyText(note))}</span>
@@ -1459,7 +1468,7 @@ function renderAnnotationItem(note) {
   }
 
   return `
-    <article class="annotation-item annotation-reason ${isOpen ? "is-open" : ""}" data-annotation-id="${escapeAttribute(note.id)}">
+    <article class="annotation-item annotation-reason ${isOpen ? "is-open" : ""}" data-annotation-id="${escapeAttribute(note.id)}"${itemDragAttributes}>
       ${renderAnnotationDragHandle(note)}
       ${renderAnnotationKindText(note)}
       <span class="level-chip ${levelClassName(note.level)}" title="${escapeAttribute(levelCriteria(note.level))}">
@@ -2718,7 +2727,9 @@ function migrateRevisedLineState(oldDoc, nextDoc) {
     .filter((bond) => bond.leftKey && bond.rightKey);
   state.lineHeights = mapLineStateObject(state.lineHeights, keyMap);
   state.lineOffsets = mapLineStateObject(state.lineOffsets, keyMap);
+  state.annotations = state.annotations.map((note) => mapAnnotationLineKeys(note, keyMap));
   state.lineBonds = normalizeLineBonds(state.lineBonds);
+  repairAnnotationHighlightsForCurrentDocuments();
 }
 
 function buildRevisedLineKeyMap(oldDoc, nextDoc) {
@@ -2732,17 +2743,166 @@ function buildRevisedLineKeyMap(oldDoc, nextDoc) {
     if (!nextArticle) return;
     const oldEntries = cleanArticleLineEntries(oldArticle);
     const nextEntries = cleanArticleLineEntries(nextArticle);
-    oldEntries.forEach((entry, index) => {
-      if (!nextEntries[index]) return;
-      map.set(`revised:${oldArticle.id}:${entry.sourceLine}`, `revised:${nextArticle.id}:${nextEntries[index].sourceLine}`);
+    matchLineEntriesByContent(oldEntries, nextEntries).forEach(([oldEntry, nextEntry]) => {
+      map.set(getArticleLineKey("revised", oldArticle, oldEntry), getArticleLineKey("revised", nextArticle, nextEntry));
     });
   });
   return map;
 }
 
+function matchLineEntriesByContent(oldEntries, nextEntries) {
+  const oldKeys = oldEntries.map((entry) => normalizeLine(entry.text));
+  const nextKeys = nextEntries.map((entry) => normalizeLine(entry.text));
+  const dp = Array.from({ length: oldKeys.length + 1 }, () => Array(nextKeys.length + 1).fill(0));
+  for (let oldIndex = oldKeys.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let nextIndex = nextKeys.length - 1; nextIndex >= 0; nextIndex -= 1) {
+      dp[oldIndex][nextIndex] = oldKeys[oldIndex] && oldKeys[oldIndex] === nextKeys[nextIndex]
+        ? dp[oldIndex + 1][nextIndex + 1] + 1
+        : Math.max(dp[oldIndex + 1][nextIndex], dp[oldIndex][nextIndex + 1]);
+    }
+  }
+
+  const pairs = [];
+  const usedOld = new Set();
+  const usedNext = new Set();
+  let oldIndex = 0;
+  let nextIndex = 0;
+  while (oldIndex < oldKeys.length && nextIndex < nextKeys.length) {
+    if (oldKeys[oldIndex] && oldKeys[oldIndex] === nextKeys[nextIndex]) {
+      pairs.push([oldEntries[oldIndex], nextEntries[nextIndex]]);
+      usedOld.add(oldIndex);
+      usedNext.add(nextIndex);
+      oldIndex += 1;
+      nextIndex += 1;
+    } else if (dp[oldIndex + 1][nextIndex] >= dp[oldIndex][nextIndex + 1]) {
+      oldIndex += 1;
+    } else {
+      nextIndex += 1;
+    }
+  }
+
+  oldEntries.forEach((oldEntry, index) => {
+    if (usedOld.has(index) || usedNext.has(index) || !nextEntries[index]) return;
+    pairs.push([oldEntry, nextEntries[index]]);
+    usedOld.add(index);
+    usedNext.add(index);
+  });
+  return pairs;
+}
+
 function mapRevisedLineKey(lineKey, keyMap) {
   if (!lineKey?.startsWith("revised:")) return lineKey;
   return keyMap.get(lineKey) || "";
+}
+
+function mapAnnotationLineKeys(note, keyMap) {
+  return {
+    ...note,
+    highlights: normalizeNoteHighlights(note.highlights)
+      .map((highlight) => {
+        if (!highlight.lineKey.startsWith("revised:")) return highlight;
+        const nextLineKey = mapRevisedLineKey(highlight.lineKey, keyMap);
+        return nextLineKey ? { ...highlight, lineKey: nextLineKey } : null;
+      })
+      .filter(Boolean),
+  };
+}
+
+function repairAnnotationHighlightsForCurrentDocuments() {
+  state.annotations = state.annotations.map((note) => ({
+    ...note,
+    highlights: normalizeNoteHighlights(note.highlights)
+      .map((highlight) => repairAnnotationHighlight(note, highlight))
+      .filter(Boolean),
+  }));
+}
+
+function repairAnnotationHighlight(note, highlight) {
+  if (!highlight.text) return highlight;
+  const currentText = getDocumentLineTextByKey(highlight.lineKey);
+  const currentFit = fitHighlightToLine(highlight, currentText, highlight.lineKey);
+  if (currentFit) return currentFit;
+  return findHighlightLineCandidate(note, highlight) || highlight;
+}
+
+function fitHighlightToLine(highlight, lineText, lineKey) {
+  if (typeof lineText !== "string") return null;
+  if (lineText.slice(highlight.start, highlight.end) === highlight.text) return { ...highlight, lineKey };
+  const index = lineText.indexOf(highlight.text);
+  if (index < 0) return null;
+  return {
+    ...highlight,
+    lineKey,
+    start: index,
+    end: index + highlight.text.length,
+  };
+}
+
+function findHighlightLineCandidate(note, highlight) {
+  const parsed = parseLawLineKey(highlight.lineKey);
+  if (!parsed) return null;
+  const entries = getCandidateHighlightLineEntries(note, parsed);
+  return entries
+    .sort((first, second) => Math.abs(first.sourceLine - parsed.sourceLine) - Math.abs(second.sourceLine - parsed.sourceLine))
+    .map((entry) => fitHighlightToLine(highlight, entry.text, entry.lineKey))
+    .find(Boolean) || null;
+}
+
+function getCandidateHighlightLineEntries(note, parsedLineKey) {
+  const article = getHighlightArticleForParsedKey(note, parsedLineKey);
+  if (!article) return [];
+  if (article.isTitle) {
+    return [{
+      text: cleanArticleLines(article)[0] || "",
+      sourceLine: article.startLine || 1,
+      lineKey: `${parsedLineKey.kind}:title:${article.startLine || 1}`,
+    }];
+  }
+  return cleanArticleLineEntries(article).map((entry) => ({
+    ...entry,
+    lineKey: getArticleLineKey(parsedLineKey.kind, article, entry),
+  }));
+}
+
+function getHighlightArticleForParsedKey(note, parsedLineKey) {
+  if (parsedLineKey.kind === "revised") {
+    if (parsedLineKey.isTitle || note.targetId === TITLE_REVISED_ID) return getTitleArticle(state.revisedDoc, "revised");
+    return findRevisedArticle(note.targetId) || findRevisedArticle(parsedLineKey.articleId);
+  }
+  if (parsedLineKey.kind === "original") {
+    if (parsedLineKey.isTitle) return getTitleArticle(state.originalDoc, "original");
+    return findOriginalArticle(parsedLineKey.articleId);
+  }
+  return null;
+}
+
+function getDocumentLineTextByKey(lineKey) {
+  const parsed = parseLawLineKey(lineKey);
+  if (!parsed) return "";
+  const article = getHighlightArticleForParsedKey({ targetId: parsed.articleId }, parsed);
+  if (!article) return "";
+  if (article.isTitle) return cleanArticleLines(article)[0] || "";
+  return cleanArticleLineEntries(article).find((entry) => entry.sourceLine === parsed.sourceLine)?.text || "";
+}
+
+function parseLawLineKey(lineKey) {
+  const parts = String(lineKey || "").split(":");
+  const kind = parts[0];
+  if (!["original", "revised"].includes(kind)) return null;
+  if (parts[1] === "title") {
+    return {
+      kind,
+      isTitle: true,
+      articleId: "",
+      sourceLine: Number(parts[2]) || 1,
+    };
+  }
+  return {
+    kind,
+    isTitle: false,
+    articleId: parts[1] || "",
+    sourceLine: Number(parts[2]) || 0,
+  };
 }
 
 function mapLineStateObject(lineState, keyMap) {
@@ -2940,8 +3100,9 @@ function stopLineNumberPointerDrag(event) {
     cleanupLineNumberPointerDrag();
     return;
   }
-  const targetNumber = document.elementFromPoint(event.clientX, event.clientY)?.closest(".law-line-number");
-  const targetLine = targetNumber?.closest(".law-line[data-line-key]");
+  const targetElement = document.elementFromPoint(event.clientX, event.clientY);
+  const targetLine = targetElement?.closest(".law-line[data-line-key]");
+  const targetNumber = targetLine?.querySelector(".law-line-number");
   if (!targetNumber || !targetLine || !isValidLineBondPair(sourceLine, targetLine)) {
     cleanupLineNumberPointerDrag();
     if (targetNumber) shakeLineNumber(targetNumber);
@@ -3129,7 +3290,12 @@ function releaseLineBondsForOriginal(originalId) {
 function getArticleLineKeys(kind, article) {
   if (!article) return [];
   if (article.isTitle) return [`${kind}:title:${article.startLine || 1}`];
-  return cleanArticleLineEntries(article).map((entry) => `${kind}:${article.id}:${entry.sourceLine}`);
+  return cleanArticleLineEntries(article).map((entry) => getArticleLineKey(kind, article, entry));
+}
+
+function getArticleLineKey(kind, article, entry) {
+  if (article?.isTitle) return `${kind}:title:${article.startLine || 1}`;
+  return `${kind}:${article.id}:${entry.sourceLine}`;
 }
 
 function findLineBond(lineKey) {
@@ -4470,6 +4636,7 @@ function applyEnvironmentPayload(payload, options = {}) {
   state.annotations = Array.isArray(payload.annotations)
     ? payload.annotations.filter((note) => note?.id && note?.targetId && note?.kind).map(normalizeAnnotationForPersistence)
     : [];
+  repairAnnotationHighlightsForCurrentDocuments();
   state.annotationDefaults = normalizeAnnotationDefaults(payload.annotationDefaults);
   state.deletedAnnotations = normalizeDeletedAnnotations(payload.deletedAnnotations);
   state.noteComposer = null;
