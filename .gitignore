@@ -1,0 +1,8 @@
+.DS_Store
+.prome-law-edit-token
+.prome-law-state.json
+.prome-law-state.before-restore-*.json
+*.before-restore-*.md
+동아리 회칙*.md
+__pycache__/
+*.pyc

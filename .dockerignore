@@ -1,0 +1,6 @@
+.prome-law-edit-token
+.prome-law-state.json
+.prome-law-state.before-restore-*.json
+*.before-restore-*.md
+__pycache__/
+*.pyc
