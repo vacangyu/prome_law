@@ -1835,7 +1835,10 @@ function mergeHighlightRanges(ranges) {
 }
 
 function bindBoardEvents() {
-  if (!IS_EDIT_MODE) return;
+  if (!IS_EDIT_MODE) {
+    bindAnnotationHighlightPreviewEvents();
+    return;
+  }
   document.querySelectorAll(".article-card.original[data-original-id]").forEach((card) => {
     const dragHandle = card.querySelector(".drag-handle");
     if (!dragHandle) return;
@@ -2124,6 +2127,33 @@ function bindBoardEvents() {
   });
   bindLineResizeEvents();
   bindLineNumberBondEvents();
+}
+
+function bindAnnotationHighlightPreviewEvents() {
+  document.querySelectorAll(".annotation-item").forEach((item) => {
+    item.addEventListener("mouseenter", () => {
+      const annotationId = item.dataset.annotationId;
+      if (!isDesktopHighlightPreviewMode()) return;
+      if (hasNoteHighlights(state.annotations.find((note) => note.id === annotationId))) {
+        setHighlightPreview(annotationId);
+      }
+    });
+    item.addEventListener("mouseleave", () => {
+      if (isDesktopHighlightPreviewMode()) clearHighlightPreview(item.dataset.annotationId);
+    });
+  });
+  document.querySelectorAll("[data-preview-highlight]").forEach((button) => {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isDesktopHighlightPreviewMode()) return;
+      previewAnnotationHighlight(button.dataset.previewHighlight);
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  });
 }
 
 function setOriginalDragImage(event, card) {
