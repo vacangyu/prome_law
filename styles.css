@@ -56,6 +56,7 @@
   --split-left: 50%;
   --visual-viewport-offset-top: 0px;
   --presentation-progress: 0%;
+  --presentation-note-height: 30vh;
 }
 
 * {
@@ -2322,12 +2323,32 @@ body.is-dragging-line-number {
   transform: translateY(0);
 }
 
-body.is-present-mode .app-shell {
-  height: calc(100vh - var(--top-nav-height));
-  min-height: 0;
+body.is-present-mode {
+  height: 100vh;
   overflow: hidden;
 }
 
+body.is-present-mode .top-nav {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
+body.is-present-mode .app-shell {
+  position: fixed;
+  top: var(--top-nav-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body.is-present-mode .workspace,
+body.is-present-mode .board-panel,
 body.is-present-mode .alignment-board {
   height: 100%;
   margin-top: 0;
@@ -2335,15 +2356,16 @@ body.is-present-mode .alignment-board {
 }
 
 @supports (height: 100dvh) {
-  body.is-present-mode .app-shell {
-    height: calc(100dvh - var(--top-nav-height));
+  body.is-present-mode {
+    height: 100dvh;
+    --presentation-note-height: 30dvh;
   }
 }
 
 .presentation-shell {
   position: relative;
   display: grid;
-  grid-template-rows: 48px minmax(0, 7fr) minmax(0, 3fr);
+  grid-template-rows: 48px minmax(0, 1fr) minmax(0, var(--presentation-note-height));
   height: 100%;
   min-height: 0;
   background: #ffffff;
