@@ -3,8 +3,9 @@ const REVISED_FILE = "동아리 회칙 062326 개정본.md";
 const STORAGE_KEY = "prome-law-diff-state-v1";
 const AUTHOR_STORAGE_KEY = "prome-law-selected-author-v1";
 const APP_CONFIG = window.PROME_LAW_CONFIG || {};
-const APP_MODE = APP_CONFIG.mode || (window.location.pathname.startsWith("/edit/") ? "edit" : "viewer");
+const APP_MODE = APP_CONFIG.mode || (window.location.pathname.startsWith("/edit/") ? "edit" : (window.location.pathname.startsWith("/present") ? "present" : "viewer"));
 const IS_EDIT_MODE = APP_MODE === "edit";
+const IS_PRESENT_MODE = APP_MODE === "present";
 const EDIT_TOKEN = APP_CONFIG.editToken || (IS_EDIT_MODE ? decodeURIComponent(window.location.pathname.split("/").filter(Boolean)[1] || "") : "");
 const REALTIME_ENABLED = APP_CONFIG.realtime !== false;
 const TITLE_ORIGINAL_ID = "original-title";
@@ -92,6 +93,8 @@ const state = {
   noteComposer: null,
   noteComposerOpening: null,
   noteComposerClosing: null,
+  highlightPreviewNoteId: null,
+  presentationIndex: 0,
   mobileBondLayout: false,
 };
 
@@ -110,6 +113,11 @@ const annotationBodyPointer = {
   target: null,
   startX: 0,
   startY: 0,
+};
+const highlightSelectionStart = {
+  lineKey: "",
+  offset: 0,
+  targetId: "",
 };
 const lineNumberDrag = {
   active: false,
@@ -145,7 +153,9 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   cacheElements();
   document.body.classList.toggle("is-edit-mode", IS_EDIT_MODE);
-  document.body.classList.toggle("is-viewer-mode", !IS_EDIT_MODE);
+  document.body.classList.toggle("is-viewer-mode", !IS_EDIT_MODE && !IS_PRESENT_MODE);
+  document.body.classList.toggle("is-present-mode", IS_PRESENT_MODE);
+  updatePageTitle();
   restoreDeviceAuthor();
   syncViewportGeometry();
   syncTopNavHeight();
@@ -160,7 +170,18 @@ async function init() {
   state.selectedRevisedId = state.selectedRevisedId || state.revisedDoc.articles[0]?.id || null;
   renderAll();
   connectRealtime();
+  maybeAutoPrintViewer();
   showToast("회칙 파일을 읽었습니다.");
+}
+
+function updatePageTitle() {
+  const title = IS_EDIT_MODE
+    ? "프로메테우스 회칙 개정안 검토"
+    : IS_PRESENT_MODE
+      ? "프로메테우스 회칙 개정안 발표"
+      : "프로메테우스 회칙 개정안";
+  document.title = title;
+  document.querySelector(".brand-block h1").textContent = title;
 }
 
 function restoreDeviceAuthor() {
@@ -209,6 +230,10 @@ function bindEvents() {
   window.visualViewport?.addEventListener("resize", scheduleViewportGeometrySync);
   window.visualViewport?.addEventListener("scroll", scheduleViewportGeometrySync);
   bindColumnDividerEvents();
+  if (IS_PRESENT_MODE) {
+    document.addEventListener("keydown", handlePresentationKeydown);
+    return;
+  }
   if (!IS_EDIT_MODE) return;
   document.querySelector("#autoMatchButton")?.addEventListener("click", () => runAutoMatch());
   document.querySelector("#saveEnvButton")?.addEventListener("click", () => {
@@ -223,7 +248,11 @@ function bindEvents() {
   document.addEventListener("click", closeMobileHeaderMenuFromOutside);
   document.addEventListener("keydown", closeMobileHeaderMenuWithEscape);
   document.querySelector("#exportMdButton")?.addEventListener("click", exportRevisedMarkdown);
+  document.querySelector("#printPdfButton")?.addEventListener("click", openViewerPrintPage);
+  document.querySelector("#presentButton")?.addEventListener("click", openPresentationPage);
   document.querySelector("#addPatchNoteButton")?.addEventListener("click", addManualPatchNote);
+  document.addEventListener("pointerdown", recordHighlightSelectionStart);
+  document.addEventListener("mouseup", handleHighlightSelection);
   els.environmentInput.addEventListener("change", loadEnvironment);
   els.duplicateToggle?.addEventListener("change", (event) => {
     state.allowDuplicate = event.target.checked;
@@ -239,6 +268,206 @@ function bindEvents() {
       renderBoard();
     });
   });
+}
+
+function handlePresentationKeydown(event) {
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    movePresentationSlide(-1);
+  } else if (event.key === "ArrowRight" || event.key === " ") {
+    event.preventDefault();
+    movePresentationSlide(1);
+  }
+}
+
+function openViewerPrintPage() {
+  setMobileHeaderMenuOpen(false);
+  window.open("/?print=1", "_blank", "noopener");
+}
+
+function openPresentationPage() {
+  setMobileHeaderMenuOpen(false);
+  window.open("/present", "_blank", "noopener");
+}
+
+function maybeAutoPrintViewer() {
+  if (IS_EDIT_MODE || IS_PRESENT_MODE) return;
+  if (!new URLSearchParams(window.location.search).has("print")) return;
+  window.setTimeout(() => window.print(), 450);
+}
+
+function handleHighlightSelection() {
+  const composer = state.noteComposer;
+  if (!IS_EDIT_MODE || !composer?.highlightMode || composer.kind !== "개정이유" || !composer.editingId) return;
+
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.toString().trim()) return;
+
+  const panel = document.querySelector(`[data-note-panel="${CSS.escape(composer.targetId)}"]`);
+  const row = panel?.closest(".alignment-row");
+  if (!row || !row.contains(selection.anchorNode) || !row.contains(selection.focusNode)) return;
+
+  const range = selection.getRangeAt(0);
+  const highlights = getHighlightsFromRange(range, row);
+  if (!highlights.length) return;
+
+  const shouldErase = isSelectionStartingOnHighlight(row, composer);
+  composer.highlights = shouldErase
+    ? subtractStoredHighlights(composer.highlights || [], highlights, row)
+    : mergeStoredHighlights([...(composer.highlights || []), ...highlights]);
+  saveLiveNoteComposer();
+  selection.removeAllRanges();
+  resetHighlightSelectionStart();
+  renderBoard();
+}
+
+function recordHighlightSelectionStart(event) {
+  const composer = state.noteComposer;
+  resetHighlightSelectionStart();
+  if (!IS_EDIT_MODE || !composer?.highlightMode || composer.kind !== "개정이유" || !composer.editingId) return;
+  if (event.button !== 0) return;
+
+  const content = event.target?.closest?.(".law-line-content");
+  const line = content?.closest?.(".law-line[data-line-key]");
+  const row = line?.closest?.(".alignment-row");
+  const panel = document.querySelector(`[data-note-panel="${CSS.escape(composer.targetId)}"]`);
+  if (!content || !line || !row || panel?.closest(".alignment-row") !== row) return;
+
+  highlightSelectionStart.lineKey = line.dataset.lineKey || "";
+  highlightSelectionStart.offset = getCaretTextOffsetFromPoint(content, event.clientX, event.clientY);
+  highlightSelectionStart.targetId = composer.editingId;
+}
+
+function resetHighlightSelectionStart() {
+  highlightSelectionStart.lineKey = "";
+  highlightSelectionStart.offset = 0;
+  highlightSelectionStart.targetId = "";
+}
+
+function previewAnnotationHighlight(annotationId) {
+  if (!annotationId) return;
+  state.highlightPreviewNoteId = annotationId;
+  renderBoard();
+  const stopPreview = () => {
+    state.highlightPreviewNoteId = null;
+    renderBoard();
+    window.removeEventListener("pointerup", stopPreview);
+    window.removeEventListener("pointercancel", stopPreview);
+  };
+  window.addEventListener("pointerup", stopPreview, { once: true });
+  window.addEventListener("pointercancel", stopPreview, { once: true });
+}
+
+function getHighlightsFromRange(range, row) {
+  return [...row.querySelectorAll(".law-line[data-line-key] .law-line-content")]
+    .filter((content) => range.intersectsNode(content))
+    .map((content) => {
+      const text = content.textContent || "";
+      const start = content.contains(range.startContainer) ? getTextOffsetInElement(content, range.startContainer, range.startOffset) : 0;
+      const end = content.contains(range.endContainer) ? getTextOffsetInElement(content, range.endContainer, range.endOffset) : text.length;
+      const normalizedStart = Math.max(0, Math.min(start, end, text.length));
+      const normalizedEnd = Math.max(0, Math.min(Math.max(start, end), text.length));
+      return {
+        lineKey: content.closest(".law-line").dataset.lineKey,
+        start: normalizedStart,
+        end: normalizedEnd,
+        text: text.slice(normalizedStart, normalizedEnd).trim(),
+      };
+    })
+    .filter((highlight) => highlight.text);
+}
+
+function getTextOffsetInElement(element, container, offset) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  try {
+    range.setEnd(container, offset);
+    return range.toString().length;
+  } catch {
+    return 0;
+  }
+}
+
+function isSelectionStartingOnHighlight(row, composer) {
+  if (highlightSelectionStart.targetId !== composer.editingId) return false;
+  const lineKey = highlightSelectionStart.lineKey;
+  const content = row.querySelector(`.law-line[data-line-key="${CSS.escape(lineKey)}"] .law-line-content`);
+  if (!content || !lineKey) return false;
+
+  const textLength = (content.textContent || "").length;
+  if (!textLength) return false;
+
+  const probeOffset = Math.min(Math.max(0, highlightSelectionStart.offset), textLength - 1);
+  return normalizeNoteHighlights(composer.highlights).some((highlight) => {
+    return highlight.lineKey === lineKey && highlight.start <= probeOffset && probeOffset < highlight.end;
+  });
+}
+
+function getCaretTextOffsetFromPoint(element, x, y) {
+  const position = document.caretPositionFromPoint?.(x, y);
+  if (position?.offsetNode && element.contains(position.offsetNode)) {
+    return getTextOffsetInElement(element, position.offsetNode, position.offset);
+  }
+
+  const range = document.caretRangeFromPoint?.(x, y);
+  if (range?.startContainer && element.contains(range.startContainer)) {
+    return getTextOffsetInElement(element, range.startContainer, range.startOffset);
+  }
+
+  return 0;
+}
+
+function mergeStoredHighlights(highlights) {
+  const byLine = new Map();
+  normalizeNoteHighlights(highlights).forEach((highlight) => {
+    const list = byLine.get(highlight.lineKey) || [];
+    list.push(highlight);
+    byLine.set(highlight.lineKey, list);
+  });
+  return [...byLine.entries()].flatMap(([lineKey, list]) => {
+    return mergeHighlightRanges(list).map((highlight) => ({ ...highlight, lineKey }));
+  });
+}
+
+function subtractStoredHighlights(storedHighlights, erasureHighlights, row) {
+  const erasuresByLine = new Map();
+  mergeStoredHighlights(erasureHighlights).forEach((highlight) => {
+    const list = erasuresByLine.get(highlight.lineKey) || [];
+    list.push(highlight);
+    erasuresByLine.set(highlight.lineKey, list);
+  });
+
+  return normalizeNoteHighlights(storedHighlights).flatMap((highlight) => {
+    const erasures = erasuresByLine.get(highlight.lineKey) || [];
+    if (!erasures.length) return [highlight];
+
+    const remaining = erasures.reduce((parts, erasure) => {
+      return parts.flatMap((part) => {
+        if (erasure.end <= part.start || erasure.start >= part.end) return [part];
+        const nextParts = [];
+        if (erasure.start > part.start) {
+          nextParts.push({ start: part.start, end: Math.min(erasure.start, part.end) });
+        }
+        if (erasure.end < part.end) {
+          nextParts.push({ start: Math.max(erasure.end, part.start), end: part.end });
+        }
+        return nextParts;
+      });
+    }, [{ start: highlight.start, end: highlight.end }]);
+
+    const lineText = getRenderedLineText(row, highlight.lineKey);
+    return remaining.map((part) => ({
+      lineKey: highlight.lineKey,
+      start: part.start,
+      end: part.end,
+      text: lineText.slice(part.start, part.end),
+    }));
+  });
+}
+
+function getRenderedLineText(row, lineKey) {
+  if (!row || !lineKey) return "";
+  return row.querySelector(`.law-line[data-line-key="${CSS.escape(lineKey)}"] .law-line-content`)?.textContent || "";
 }
 
 function toggleMobileHeaderMenu(event) {
@@ -634,7 +863,11 @@ function runAutoMatch(options = {}) {
 
 function renderAll() {
   if (els.duplicateToggle) els.duplicateToggle.checked = state.allowDuplicate;
-  renderBoard();
+  if (IS_PRESENT_MODE) {
+    renderPresentation();
+  } else {
+    renderBoard();
+  }
   renderInspector();
   renderValidation();
 }
@@ -698,6 +931,88 @@ function renderBoard() {
   refreshAllLineBonds({ persist: true });
   state.noteComposerOpening = null;
   flushPendingRemoteStateIfIdle();
+}
+
+function renderPresentation() {
+  document.body.classList.remove("has-note-composer");
+  ensureTitleAlignment();
+  resetRenderLineNumbers();
+  const notes = getPresentationNotes();
+  if (!notes.length) {
+    els.board.innerHTML = `
+      <section class="presentation-empty">
+        <h2>공개된 개정이유가 없습니다.</h2>
+      </section>
+    `;
+    return;
+  }
+
+  state.presentationIndex = clamp(state.presentationIndex, 0, notes.length - 1);
+  const note = notes[state.presentationIndex];
+  els.board.innerHTML = `
+    <section class="presentation-shell">
+      <div class="presentation-progress">${state.presentationIndex + 1} / ${notes.length}</div>
+      <div class="presentation-cells">
+        ${renderPresentationCellPair(note)}
+      </div>
+      <article class="presentation-note ${levelClassName(note.level)}">
+        <div class="presentation-note-meta">
+          <strong>${escapeHtml(displayPatchType(note.type))}</strong>
+          <span class="level-chip ${levelClassName(note.level)}">
+            <span class="level-roman">${escapeHtml(levelRoman(note.level))}</span>
+            <span>${escapeHtml(levelName(note.level))}</span>
+          </span>
+        </div>
+        <p>${escapeHtml(annotationBodyText(note))}</p>
+      </article>
+      <button class="presentation-nav presentation-prev" type="button" data-presentation-prev aria-label="이전">‹</button>
+      <button class="presentation-nav presentation-next" type="button" data-presentation-next aria-label="다음">›</button>
+    </section>
+  `;
+  bindPresentationEvents();
+}
+
+function getPresentationNotes() {
+  return state.annotations.filter((note) => note.kind !== "댓글" && note.isPublic !== false);
+}
+
+function renderPresentationCellPair(note) {
+  if (note.targetId === TITLE_REVISED_ID) {
+    const revisedTitle = getTitleArticle(state.revisedDoc, "revised");
+    const alignment = getAlignment(TITLE_REVISED_ID);
+    const originals = alignment.originalArticleIds.map((id) => findOriginalArticle(id)).filter(Boolean);
+    const originalText = originals.flatMap((article) => cleanArticleLines(article));
+    const revisedText = cleanArticleLines(revisedTitle);
+    const revisedDiff = buildLineRenderDiff(originalText, revisedText);
+    return `
+      <div class="article-slot">${originals.map((article) => renderOriginalArticleCard(article, TITLE_REVISED_ID, buildLineRenderDiff(cleanArticleLines(article), revisedText).oldLines)).join("")}</div>
+      <div class="article-slot">${renderTitleArticleCard("revised", revisedTitle, revisedDiff.newLines)}</div>
+    `;
+  }
+
+  const revisedArticle = findRevisedArticle(note.targetId);
+  if (!revisedArticle) return `<div class="presentation-missing">대상 조문을 찾을 수 없습니다.</div>`;
+  const alignment = getAlignment(revisedArticle.id);
+  const originals = alignment.originalArticleIds.map((id) => findOriginalArticle(id)).filter(Boolean);
+  const originalText = originals.flatMap((article) => cleanArticleLines(article));
+  const revisedText = cleanArticleLines(revisedArticle);
+  const revisedDiff = buildLineRenderDiff(originalText, revisedText);
+  return `
+    <div class="article-slot">${originals.map((article) => renderOriginalArticleCard(article, revisedArticle.id, buildLineRenderDiff(cleanArticleLines(article), revisedText).oldLines)).join("")}</div>
+    <div class="article-slot">${renderRevisedArticleCard(revisedArticle, revisedDiff.newLines)}</div>
+  `;
+}
+
+function bindPresentationEvents() {
+  document.querySelector("[data-presentation-prev]")?.addEventListener("click", () => movePresentationSlide(-1));
+  document.querySelector("[data-presentation-next]")?.addEventListener("click", () => movePresentationSlide(1));
+}
+
+function movePresentationSlide(delta) {
+  const notes = getPresentationNotes();
+  if (!notes.length) return;
+  state.presentationIndex = clamp(state.presentationIndex + delta, 0, notes.length - 1);
+  renderPresentation();
 }
 
 function renderTitleSection() {
@@ -982,6 +1297,7 @@ function renderAnnotationItem(note) {
         <span>${escapeHtml(levelName(note.level))}</span>
       </span>
       <span class="${bodyClass}">${escapeHtml(annotationBodyText(note))}</span>
+      ${renderAnnotationHighlightPreview(note)}
       ${renderAnnotationActions(note)}
     </article>
   `;
@@ -1044,6 +1360,15 @@ function renderAnnotationActions(note) {
   `;
 }
 
+function renderAnnotationHighlightPreview(note) {
+  if (!IS_EDIT_MODE || !hasNoteHighlights(note)) return "";
+  return `<button class="annotation-highlight-preview" type="button" data-preview-highlight="${escapeAttribute(note.id)}">여기를 탭하여 강조 표시</button>`;
+}
+
+function hasNoteHighlights(note) {
+  return normalizeNoteHighlights(note?.highlights).length > 0;
+}
+
 function renderChevronIcon(isOpen = false) {
   return `<svg class="${isOpen ? "is-open" : ""}" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3 3.5-3"></path></svg>`;
 }
@@ -1086,6 +1411,18 @@ function renderNoteComposer(composer, options = {}) {
         </div>
       </div>
       ${isReason ? `
+        <div class="note-switch-group">
+          <span class="note-chip-label">하이라이트</span>
+          <button
+            class="note-switch-toggle ${composer.highlightMode ? "is-on" : ""}"
+            type="button"
+            data-note-highlight-toggle
+            aria-pressed="${composer.highlightMode ? "true" : "false"}"
+          >
+            <span class="note-switch-toggle-thumb" aria-hidden="true"></span>
+            <span class="note-switch-text">하이라이트 모드</span>
+          </button>
+        </div>
         <div class="note-chip-group">
           <span class="note-chip-label">방식</span>
           <div class="note-chip-row" role="group" aria-label="개정 방식">
@@ -1170,10 +1507,7 @@ function renderCommentNoteInputs(composer, canWrite) {
 }
 
 function renderNoteSubmitControls(composer) {
-  if (!composer.editingId) {
-    return `<button class="note-submit-button" type="button" data-note-submit ${canSubmitNote(composer) ? "" : "disabled"}>제출</button>`;
-  }
-  return "";
+  return `<button class="note-submit-button note-close-save-button" type="button" data-note-submit ${canCloseNoteComposer(composer) ? "" : "disabled"}>저장하고 닫기</button>`;
 }
 
 function renderRevisedEditor(article) {
@@ -1214,6 +1548,7 @@ function renderLawLines(lines, statuses = [], options = {}) {
     const lineStyle = lineStyles.length ? ` style="${lineStyles.join("; ")}"` : "";
     const bondClass = !ignoreBondLayout && isLineBonded(lineKey) ? " is-line-bonded" : "";
     const unbondKeyAttribute = lineKey ? ` data-unbond-line="${escapeAttribute(lineKey)}"` : "";
+    const lineHtml = applyActiveHighlightsToLine(rendered.html, lineKey);
     return `
       <div class="law-line ${rendered.className}${bondClass}"${lineKeyAttribute}${lineStyle}>
         <span class="law-line-marker">
@@ -1222,10 +1557,97 @@ function renderLawLines(lines, statuses = [], options = {}) {
           </button>
           <span class="law-line-number">${escapeHtml(lineNumber)}</span>
         </span>
-        <span class="law-line-content">${rendered.html}</span>
+        <span class="law-line-content">${lineHtml}</span>
       </div>
     `;
   }).join("");
+}
+
+function applyActiveHighlightsToLine(html, lineKey) {
+  if (!lineKey) return html;
+  const ranges = getActiveHighlightRangesForLine(lineKey);
+  if (!ranges.length) return html;
+  return applyHighlightRangesToHtml(html, ranges);
+}
+
+function getActiveHighlightRangesForLine(lineKey) {
+  const noteIds = getActiveHighlightNoteIds();
+  if (!noteIds.length) return [];
+  return noteIds.flatMap((noteId) => {
+    const note = getHighlightSourceNote(noteId);
+    return normalizeNoteHighlights(note?.highlights).filter((highlight) => highlight.lineKey === lineKey);
+  });
+}
+
+function getActiveHighlightNoteIds() {
+  const ids = [];
+  if (state.highlightPreviewNoteId) ids.push(state.highlightPreviewNoteId);
+  if (state.noteComposer?.highlightMode && state.noteComposer.editingId) ids.push(state.noteComposer.editingId);
+  if (IS_PRESENT_MODE) {
+    const note = getPresentationNotes()[state.presentationIndex];
+    if (note?.id) ids.push(note.id);
+  }
+  return [...new Set(ids)];
+}
+
+function getHighlightSourceNote(noteId) {
+  if (state.noteComposer?.editingId === noteId) return state.noteComposer;
+  return state.annotations.find((note) => note.id === noteId);
+}
+
+function applyHighlightRangesToHtml(html, ranges) {
+  const mergedRanges = mergeHighlightRanges(ranges);
+  if (!mergedRanges.length) return html;
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  let offset = 0;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const length = node.nodeValue.length;
+    textNodes.push({ node, start: offset, end: offset + length });
+    offset += length;
+  }
+
+  textNodes.forEach(({ node, start, end }) => {
+    const overlaps = mergedRanges
+      .map((range) => ({ start: Math.max(range.start, start), end: Math.min(range.end, end) }))
+      .filter((range) => range.end > range.start);
+    if (!overlaps.length) return;
+
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    overlaps.forEach((range) => {
+      const localStart = range.start - start;
+      const localEnd = range.end - start;
+      if (localStart > cursor) fragment.append(document.createTextNode(node.nodeValue.slice(cursor, localStart)));
+      const mark = document.createElement("span");
+      mark.className = "law-user-highlight";
+      mark.textContent = node.nodeValue.slice(localStart, localEnd);
+      fragment.append(mark);
+      cursor = localEnd;
+    });
+    if (cursor < node.nodeValue.length) fragment.append(document.createTextNode(node.nodeValue.slice(cursor)));
+    node.parentNode.replaceChild(fragment, node);
+  });
+
+  return template.innerHTML;
+}
+
+function mergeHighlightRanges(ranges) {
+  const sorted = normalizeNoteHighlights(ranges).sort((first, second) => first.start - second.start || first.end - second.end);
+  return sorted.reduce((merged, range) => {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+      previous.text = `${previous.text}${range.text ? ` ${range.text}` : ""}`.trim();
+    } else {
+      merged.push({ ...range });
+    }
+    return merged;
+  }, []);
 }
 
 function bindBoardEvents() {
@@ -1374,6 +1796,14 @@ function bindBoardEvents() {
       updateNoteComposerField("isPublic", composer.isPublic === false);
     });
   });
+  document.querySelectorAll("[data-note-highlight-toggle]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const composer = state.noteComposer;
+      if (!composer || composer.kind !== "개정이유") return;
+      updateNoteComposerField("highlightMode", !composer.highlightMode);
+    });
+  });
   document.querySelectorAll(".note-composer [data-note-field]").forEach((field) => {
     const eventName = field.tagName === "SELECT" ? "change" : "input";
     field.addEventListener(eventName, (event) => {
@@ -1436,6 +1866,17 @@ function bindBoardEvents() {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       deleteAnnotation(button.dataset.deleteAnnotation);
+    });
+  });
+  document.querySelectorAll("[data-preview-highlight]").forEach((button) => {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      previewAnnotationHighlight(button.dataset.previewHighlight);
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
     });
   });
 
@@ -1663,6 +2104,8 @@ function createNoteComposer(targetId) {
     originalLines: "",
     revisedLines: "",
     author: state.selectedAuthor,
+    highlights: [],
+    highlightMode: false,
     body: "",
   };
 }
@@ -1682,6 +2125,7 @@ function createDraftAnnotation(targetId) {
     originalLines: "",
     revisedLines: "",
     author: state.selectedAuthor,
+    highlights: [],
     body: "",
     createdAt: now,
     updatedAt: now,
@@ -1728,6 +2172,8 @@ function createNoteComposerFromAnnotation(note) {
     originalLines: note.originalLines || "",
     revisedLines: note.revisedLines || "",
     author: NOTE_AUTHORS.includes(note.author) ? note.author : state.selectedAuthor,
+    highlights: normalizeNoteHighlights(note.highlights),
+    highlightMode: false,
     body: note.body || "",
   };
 }
@@ -1768,6 +2214,8 @@ function updateNoteComposerField(field, value, options = {}) {
     persistDeviceAuthor(value);
   } else if (field === "isPublic") {
     composer.isPublic = composer.kind === "댓글" ? false : value !== false && value !== "false";
+  } else if (field === "highlightMode") {
+    composer.highlightMode = value !== false && value !== "false";
   } else {
     composer[field] = value;
   }
@@ -1804,7 +2252,7 @@ function refreshNoteComposerControls() {
   if (!composer) return;
   const panel = document.querySelector(`[data-note-composer="${CSS.escape(composer.targetId)}"]`);
   if (!panel) return;
-  panel.querySelector("[data-note-submit]")?.toggleAttribute("disabled", !canSubmitNote(composer));
+  panel.querySelector("[data-note-submit]")?.toggleAttribute("disabled", !canCloseNoteComposer(composer));
 }
 
 function refreshInlineAnnotationBody(composer = state.noteComposer) {
@@ -1869,6 +2317,7 @@ function saveNoteComposer(composer) {
     originalLines: composer.originalLines || "",
     revisedLines: composer.revisedLines || "",
     author: NOTE_AUTHORS.includes(composer.author) ? composer.author : "",
+    highlights: normalizeNoteHighlights(composer.highlights),
     body: composer.body.trim(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1961,6 +2410,7 @@ function getAnnotationComparable(note) {
     originalLines: note.originalLines || "",
     revisedLines: note.revisedLines || "",
     author: note.author || "",
+    highlights: normalizeNoteHighlights(note.highlights),
     body: String(note.body || "").trim(),
   };
 }
@@ -1976,8 +2426,26 @@ function getComposerComparable(composer) {
     originalLines: composer.originalLines || "",
     revisedLines: composer.revisedLines || "",
     author: composer.author || "",
+    highlights: normalizeNoteHighlights(composer.highlights),
     body: String(composer.body || "").trim(),
   };
+}
+
+function normalizeNoteHighlights(highlights) {
+  if (!Array.isArray(highlights)) return [];
+  return highlights
+    .map((highlight) => ({
+      lineKey: typeof highlight?.lineKey === "string" ? highlight.lineKey : "",
+      start: Number(highlight?.start),
+      end: Number(highlight?.end),
+      text: typeof highlight?.text === "string" ? highlight.text : "",
+    }))
+    .filter((highlight) => highlight.lineKey && Number.isFinite(highlight.start) && Number.isFinite(highlight.end) && highlight.end > highlight.start)
+    .map((highlight) => ({
+      ...highlight,
+      start: Math.max(0, Math.floor(highlight.start)),
+      end: Math.max(0, Math.floor(highlight.end)),
+    }));
 }
 
 function levelClassName(level) {
@@ -3550,6 +4018,7 @@ function normalizeAnnotationForPersistence(note) {
   return {
     ...note,
     isPublic: note.kind === "댓글" ? false : note.isPublic !== false,
+    highlights: normalizeNoteHighlights(note.highlights),
   };
 }
 
@@ -3858,46 +4327,7 @@ function persistLocalState() {
 }
 
 async function exportRevisedMarkdown() {
-  const lineReplacements = new Map();
-  const manualNotesByArticle = new Map();
-  const plusByLine = new Map(state.revisedDoc.plusNotes.map((note) => [note.sourceLine, note]));
-
-  state.revisedDoc.patchNotes.filter((note) => !note.deleted).forEach((note) => {
-    if (note.source === "manual") {
-      const list = manualNotesByArticle.get(note.targetId) || [];
-      list.push(note);
-      manualNotesByArticle.set(note.targetId, list);
-    } else if (note.sourceLine) {
-      lineReplacements.set(note.sourceLine, serializePatchNote(note));
-    }
-  });
-
-  const articleByStartLine = new Map(state.revisedDoc.articles.map((article) => [article.startLine, article]));
-  const titleLine = state.revisedDoc.title?.sourceLine || 1;
-  const output = [];
-  state.revisedDoc.lines.forEach((line, index) => {
-    const lineNumber = index + 1;
-    const plusNote = plusByLine.get(lineNumber);
-    if (lineReplacements.has(lineNumber)) {
-      output.push(lineReplacements.get(lineNumber));
-    } else if (plusNote?.convertedPatchNoteId) {
-      const converted = findPatchNote(plusNote.convertedPatchNoteId);
-      if (converted && !converted.deleted) output.push(serializePatchNote(converted));
-    } else {
-      output.push(line);
-    }
-
-    if (lineNumber === titleLine && manualNotesByArticle.has(TITLE_REVISED_ID)) {
-      manualNotesByArticle.get(TITLE_REVISED_ID).forEach((note) => output.push(serializePatchNote(note)));
-    }
-
-    const article = articleByStartLine.get(lineNumber);
-    if (article && manualNotesByArticle.has(article.id)) {
-      manualNotesByArticle.get(article.id).forEach((note) => output.push(serializePatchNote(note)));
-    }
-  });
-
-  const blob = new Blob([output.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const blob = new Blob([state.revisedText], { type: "text/markdown;charset=utf-8" });
   await saveBlob(blob, "동아리 회칙 062326 개정본.export.md", "text/markdown");
 }
 

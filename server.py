@@ -74,6 +74,8 @@ EDIT_TOKEN = get_edit_token()
 def normalize_annotation(note):
     normalized = dict(note)
     normalized["isPublic"] = False if normalized.get("kind") == "댓글" else normalized.get("isPublic") is not False
+    highlights = normalized.get("highlights")
+    normalized["highlights"] = highlights if isinstance(highlights, list) else []
     return normalized
 
 
@@ -206,6 +208,10 @@ class PromeLawHandler(SimpleHTTPRequestHandler):
 
         if path in {"/", "/viewer"}:
             self.send_index("viewer")
+            return
+
+        if path == "/present":
+            self.send_index("present")
             return
 
         if path.startswith("/edit/"):
