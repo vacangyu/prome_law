@@ -1008,6 +1008,7 @@ function renderPresentation() {
   resetRenderLineNumbers();
   const notes = getPresentationNotes();
   if (!notes.length) {
+    setPresentationProgress(0);
     els.board.innerHTML = `
       <section class="presentation-empty">
         <h2>공개된 개정이유가 없습니다.</h2>
@@ -1018,9 +1019,10 @@ function renderPresentation() {
 
   state.presentationIndex = clamp(state.presentationIndex, 0, notes.length - 1);
   const note = notes[state.presentationIndex];
+  setPresentationProgress(((state.presentationIndex + 1) / notes.length) * 100);
   els.board.innerHTML = `
     <section class="presentation-shell">
-      <div class="presentation-progress">${state.presentationIndex + 1} / ${notes.length}</div>
+      ${renderPresentationContextBand(note)}
       <div class="presentation-cells">
         ${renderPresentationCellPair(note)}
       </div>
@@ -1043,6 +1045,32 @@ function renderPresentation() {
 
 function getPresentationNotes() {
   return state.annotations.filter((note) => note.kind !== "댓글" && note.isPublic !== false);
+}
+
+function setPresentationProgress(progress) {
+  document.documentElement.style.setProperty("--presentation-progress", `${clamp(progress, 0, 100)}%`);
+}
+
+function renderPresentationContextBand(note) {
+  return renderChapterBand(getPresentationContextText(note), "presentation-context-band");
+}
+
+function getPresentationContextText(note) {
+  if (note.targetId === TITLE_REVISED_ID) return "제목";
+  const article = findRevisedArticle(note.targetId);
+  if (!article) return "대상 조문 없음";
+  return `${formatPresentationChapter(article.chapter)} - ${formatPresentationArticle(article)}`;
+}
+
+function formatPresentationChapter(chapter) {
+  const text = chapter || "기타";
+  const match = text.match(/^(제\d+장)\s+(.+)$/);
+  return match ? `${match[1]} (${match[2]})` : text;
+}
+
+function formatPresentationArticle(article) {
+  const label = article.label || `제${article.number || "?"}조`;
+  return article.title ? `${label} (${article.title})` : label;
 }
 
 function renderPresentationCellPair(note) {
@@ -1097,9 +1125,10 @@ function renderChapterSection(chapter, rowsHtml) {
   `;
 }
 
-function renderChapterBand(chapter) {
+function renderChapterBand(chapter, extraClass = "") {
+  const className = extraClass ? `chapter-band ${extraClass}` : "chapter-band";
   return `
-    <section class="chapter-band" aria-label="${escapeAttribute(chapter)}">
+    <section class="${className}" aria-label="${escapeAttribute(chapter)}">
       <span class="chapter-title">${escapeHtml(chapter)}</span>
     </section>
   `;
@@ -1805,6 +1834,7 @@ function bindBoardEvents() {
 
   document.querySelectorAll("[data-select-row]").forEach((element) => {
     element.addEventListener("click", () => {
+      if (hasActiveTextSelection()) return;
       state.selectedRevisedId = element.dataset.selectRow;
       persistLocalState();
       renderAll();
@@ -2957,6 +2987,11 @@ function getLineSide(line) {
 
 function getLineNumberText(line) {
   return line.querySelector(".law-line-number")?.textContent.trim() || "";
+}
+
+function hasActiveTextSelection() {
+  const selection = window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
 }
 
 function isValidLineBondPair(firstLine, secondLine) {

@@ -53,6 +53,7 @@
   --law-line-inline-padding: 8px;
   --split-left: 50%;
   --visual-viewport-offset-top: 0px;
+  --presentation-progress: 0%;
 }
 
 * {
@@ -93,6 +94,22 @@ button {
   border-bottom: 1px solid rgba(208, 215, 222, 0.7);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
+}
+
+body.is-present-mode .top-nav {
+  overflow: hidden;
+}
+
+body.is-present-mode .top-nav::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--presentation-progress);
+  height: 4px;
+  background: #0969da;
+  content: "";
+  pointer-events: none;
+  transition: width 180ms ease;
 }
 
 .brand-block,
@@ -2328,13 +2345,8 @@ body.is-present-mode .alignment-board {
   font-weight: 700;
 }
 
-.presentation-progress {
-  border-bottom: 1px solid var(--github-border-muted);
-  padding: 8px 40px;
-  color: #6e7781;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 12px;
-  font-weight: 700;
+.presentation-context-band {
+  top: calc(var(--top-nav-height) - var(--chapter-sticky-overlap));
 }
 
 .presentation-cells {
