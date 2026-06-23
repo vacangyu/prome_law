@@ -396,6 +396,11 @@ function restoreScreenLayoutAfterPrint() {
     cancelAnimationFrame(printLayoutFrame);
     printLayoutFrame = 0;
   }
+  if (isPrintView()) {
+    document.body.classList.add("is-printing-layout");
+    refreshAllLineBonds({ persist: false, forceDesktop: true });
+    return;
+  }
   document.body.classList.remove("is-printing-layout");
   if (state.revisedDoc) renderAll();
 }
@@ -1063,7 +1068,10 @@ function renderBoard() {
     els.unassigned.innerHTML = getUnassignedOriginalArticles().map((article) => renderOriginalArticleCard(article, null)).join("");
   }
   bindBoardEvents();
-  refreshAllLineBonds({ persist: true });
+  refreshAllLineBonds({
+    persist: !isPrintLayoutActive(),
+    forceDesktop: isPrintLayoutActive(),
+  });
   state.noteComposerOpening = null;
   flushPendingRemoteStateIfIdle();
 }

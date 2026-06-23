@@ -2846,15 +2846,71 @@ body.is-present-mode .alignment-board {
   }
 }
 
+body.is-print-page .top-nav {
+  position: static;
+  min-height: auto;
+  padding: 0 0 8mm;
+  border: 0;
+  background: #ffffff;
+  transform: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.is-print-page .app-shell {
+  padding: 0;
+}
+
+body.is-print-page .chapter-band {
+  position: static;
+  top: auto;
+  height: auto;
+  min-height: 0;
+  margin-top: 5mm;
+  padding: 2.5mm 4mm;
+}
+
+body.is-print-page .alignment-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+body.is-print-page .article-slot:first-child {
+  border-right: 1px solid var(--github-border);
+  border-bottom: 0;
+}
+
+body.is-print-page .article-card.document-article::before,
+body.is-print-page .article-slot.empty::before {
+  display: none;
+}
+
+body.is-print-page .column-divider,
+body.is-print-page .row-line-handle,
+body.is-print-page .annotation-drag-handle,
+body.is-print-page .annotation-actions,
+body.is-print-page .note-add-row-button,
+body.is-print-page .annotation-public-badge,
+body.is-print-page .annotation-highlight-preview,
+body.is-print-page .line-lock-button,
+body.is-print-page .mobile-menu-button,
+body.is-print-page .toolbar {
+  display: none !important;
+}
+
+body.is-print-page .law-text,
 body.is-printing-layout .law-text {
   font-size: 8.5pt;
 }
 
+body.is-print-page .law-line,
 body.is-printing-layout .law-line {
   min-height: 16pt;
   transition: none !important;
 }
 
+body.is-print-page .law-line-content,
+body.is-print-page .law-line-number,
 body.is-printing-layout .law-line-content,
 body.is-printing-layout .law-line-number {
   line-height: 16pt;
