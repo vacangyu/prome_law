@@ -915,7 +915,7 @@ body.is-dragging-annotation {
 
 .annotation-actions {
   position: absolute;
-  top: 4px;
+  top: 50%;
   right: 34px;
   z-index: 3;
   display: inline-flex;
@@ -925,6 +925,7 @@ body.is-dragging-annotation {
   align-items: center;
   justify-content: flex-end;
   margin-left: 0;
+  transform: translateY(-50%);
 }
 
 .annotation-actions.is-open {
@@ -942,12 +943,11 @@ body.is-dragging-annotation {
   background: transparent;
   color: #6e7781;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  text-decoration: none;
   white-space: nowrap;
+  cursor: default;
 }
 
 .annotation-highlight-preview:hover,
@@ -955,6 +955,10 @@ body.is-dragging-annotation {
   background: transparent;
   color: #24292f;
   outline: none;
+}
+
+.annotation-highlight-preview-mobile {
+  display: none;
 }
 
 .annotation-action-button {
@@ -2635,7 +2639,19 @@ body.is-present-mode .alignment-board {
     grid-column: 1 / -1;
     justify-self: start;
     padding: 1px 0 0;
+    font-weight: 700;
     text-align: left;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  .annotation-highlight-preview-desktop {
+    display: none;
+  }
+
+  .annotation-highlight-preview-mobile {
+    display: inline;
   }
 
   .column-divider {

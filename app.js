@@ -232,6 +232,7 @@ function bindEvents() {
   window.visualViewport?.addEventListener("resize", scheduleViewportGeometrySync);
   window.visualViewport?.addEventListener("scroll", scheduleViewportGeometrySync);
   bindColumnDividerEvents();
+  document.addEventListener("pointermove", syncDesktopHighlightHoverPreview);
   if (IS_PRESENT_MODE) {
     document.addEventListener("keydown", handlePresentationKeydown);
     return;
@@ -390,17 +391,40 @@ function resetHighlightSelectionStart() {
 }
 
 function previewAnnotationHighlight(annotationId) {
+  if (isDesktopHighlightPreviewMode()) return;
   if (!annotationId) return;
-  state.highlightPreviewNoteId = annotationId;
-  renderBoard();
+  setHighlightPreview(annotationId);
   const stopPreview = () => {
-    state.highlightPreviewNoteId = null;
-    renderBoard();
+    clearHighlightPreview(annotationId);
     window.removeEventListener("pointerup", stopPreview);
     window.removeEventListener("pointercancel", stopPreview);
   };
   window.addEventListener("pointerup", stopPreview, { once: true });
   window.addEventListener("pointercancel", stopPreview, { once: true });
+}
+
+function setHighlightPreview(annotationId) {
+  if (!annotationId || state.highlightPreviewNoteId === annotationId) return;
+  state.highlightPreviewNoteId = annotationId;
+  renderBoard();
+}
+
+function clearHighlightPreview(annotationId = "") {
+  if (!state.highlightPreviewNoteId) return;
+  if (annotationId && state.highlightPreviewNoteId !== annotationId) return;
+  state.highlightPreviewNoteId = null;
+  renderBoard();
+}
+
+function syncDesktopHighlightHoverPreview(event) {
+  if (!isDesktopHighlightPreviewMode() || !state.highlightPreviewNoteId) return;
+  const item = document.elementFromPoint(event.clientX, event.clientY)?.closest(".annotation-item");
+  if (item?.dataset.annotationId === state.highlightPreviewNoteId) return;
+  clearHighlightPreview();
+}
+
+function isDesktopHighlightPreviewMode() {
+  return window.matchMedia("(min-width: 769px) and (hover: hover) and (pointer: fine)").matches;
 }
 
 function getHighlightsFromRange(range, row) {
@@ -1406,8 +1430,13 @@ function renderAnnotationActions(note) {
 }
 
 function renderAnnotationHighlightPreview(note) {
-  if (!IS_EDIT_MODE || !hasNoteHighlights(note)) return "";
-  return `<button class="annotation-highlight-preview" type="button" data-preview-highlight="${escapeAttribute(note.id)}">여기를 탭하여 강조 표시</button>`;
+  if (!hasNoteHighlights(note)) return "";
+  return `
+    <button class="annotation-highlight-preview" type="button" data-preview-highlight="${escapeAttribute(note.id)}">
+      <span class="annotation-highlight-preview-desktop">손을 올려 개정 부분 강조 표시</span>
+      <span class="annotation-highlight-preview-mobile">여기를 탭하여 강조 표시</span>
+    </button>
+  `;
 }
 
 function hasNoteHighlights(note) {
@@ -1625,6 +1654,12 @@ function getActiveHighlightRangesForLine(lineKey) {
 }
 
 function getActiveHighlightNoteIds() {
+  if (IS_EDIT_MODE) {
+    return [...new Set([
+      ...state.annotations.filter(hasNoteHighlights).map((note) => note.id),
+      ...(hasNoteHighlights(state.noteComposer) ? [state.noteComposer.editingId] : []),
+    ].filter(Boolean))];
+  }
   const ids = [];
   if (state.highlightPreviewNoteId) ids.push(state.highlightPreviewNoteId);
   if (state.noteComposer?.highlightMode && state.noteComposer.editingId) ids.push(state.noteComposer.editingId);
@@ -1895,8 +1930,19 @@ function bindBoardEvents() {
     });
   });
   document.querySelectorAll(".annotation-item").forEach((item) => {
+    item.addEventListener("mouseenter", () => {
+      const annotationId = item.dataset.annotationId;
+      if (IS_EDIT_MODE || !isDesktopHighlightPreviewMode()) return;
+      if (hasNoteHighlights(state.annotations.find((note) => note.id === annotationId))) {
+        setHighlightPreview(annotationId);
+      }
+    });
+    item.addEventListener("mouseleave", () => {
+      if (!IS_EDIT_MODE && isDesktopHighlightPreviewMode()) clearHighlightPreview(item.dataset.annotationId);
+    });
     item.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (!IS_EDIT_MODE) return;
       const annotationId = item.dataset.annotationId;
       if (annotationId) toggleAnnotationEditor(annotationId);
     });
@@ -1917,6 +1963,7 @@ function bindBoardEvents() {
     button.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (isDesktopHighlightPreviewMode()) return;
       previewAnnotationHighlight(button.dataset.previewHighlight);
     });
     button.addEventListener("click", (event) => {
@@ -2150,7 +2197,7 @@ function createNoteComposer(targetId) {
     revisedLines: "",
     author: state.selectedAuthor,
     highlights: [],
-    highlightMode: false,
+    highlightMode: true,
     body: "",
   };
 }
@@ -2218,7 +2265,7 @@ function createNoteComposerFromAnnotation(note) {
     revisedLines: note.revisedLines || "",
     author: NOTE_AUTHORS.includes(note.author) ? note.author : state.selectedAuthor,
     highlights: normalizeNoteHighlights(note.highlights),
-    highlightMode: false,
+    highlightMode: true,
     body: note.body || "",
   };
 }
