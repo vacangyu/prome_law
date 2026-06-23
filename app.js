@@ -89,6 +89,7 @@ const state = {
   editingSaving: false,
   annotations: [],
   annotationDefaults: {},
+  deletedAnnotations: {},
   selectedAuthor: "",
   noteComposer: null,
   noteComposerOpening: null,
@@ -1035,12 +1036,14 @@ function renderPresentation() {
           </span>
         </div>
         <p>${escapeHtml(annotationBodyText(note))}</p>
+        ${renderPresentationNoteIndicators(note, notes)}
       </article>
       <button class="presentation-nav presentation-prev" type="button" data-presentation-prev aria-label="이전">‹</button>
       <button class="presentation-nav presentation-next" type="button" data-presentation-next aria-label="다음">›</button>
     </section>
   `;
   bindPresentationEvents();
+  schedulePresentationLayoutRefresh();
 }
 
 function getPresentationNotes() {
@@ -1053,6 +1056,24 @@ function setPresentationProgress(progress) {
 
 function renderPresentationContextBand(note) {
   return renderChapterBand(getPresentationContextText(note), "presentation-context-band");
+}
+
+function renderPresentationNoteIndicators(activeNote, notes) {
+  const targetNotes = notes.filter((note) => note.targetId === activeNote.targetId);
+  if (targetNotes.length < 2) return "";
+  return `
+    <div class="presentation-note-indicators" aria-label="이 조의 개정이유 위치">
+      ${targetNotes.map((note, index) => `
+        <button
+          class="presentation-note-dot ${note.id === activeNote.id ? "is-active" : ""}"
+          type="button"
+          data-presentation-note-id="${escapeAttribute(note.id)}"
+          aria-label="${index + 1}번째 개정이유로 이동"
+          aria-current="${note.id === activeNote.id ? "true" : "false"}"
+        ></button>
+      `).join("")}
+    </div>
+  `;
 }
 
 function getPresentationContextText(note) {
@@ -1103,6 +1124,15 @@ function renderPresentationCellPair(note) {
 function bindPresentationEvents() {
   document.querySelector("[data-presentation-prev]")?.addEventListener("click", () => movePresentationSlide(-1));
   document.querySelector("[data-presentation-next]")?.addEventListener("click", () => movePresentationSlide(1));
+  document.querySelectorAll("[data-presentation-note-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const notes = getPresentationNotes();
+      const nextIndex = notes.findIndex((note) => note.id === button.dataset.presentationNoteId);
+      if (nextIndex < 0) return;
+      state.presentationIndex = nextIndex;
+      renderPresentation();
+    });
+  });
 }
 
 function movePresentationSlide(delta) {
@@ -1110,6 +1140,48 @@ function movePresentationSlide(delta) {
   if (!notes.length) return;
   state.presentationIndex = clamp(state.presentationIndex + delta, 0, notes.length - 1);
   renderPresentation();
+}
+
+function schedulePresentationLayoutRefresh() {
+  if (!IS_PRESENT_MODE) return;
+  window.requestAnimationFrame(() => {
+    refreshAllLineBonds({ persist: false });
+    window.requestAnimationFrame(scrollPresentationHighlightsIntoView);
+  });
+}
+
+function scrollPresentationHighlightsIntoView() {
+  if (!IS_PRESENT_MODE) return;
+  const highlightGroups = new Map();
+  document.querySelectorAll(".presentation-cells .law-user-highlight").forEach((highlight) => {
+    const container = highlight.closest(".article-slot");
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const rect = highlight.getBoundingClientRect();
+    const relativeTop = rect.top - containerRect.top + container.scrollTop;
+    const relativeBottom = rect.bottom - containerRect.top + container.scrollTop;
+    const group = highlightGroups.get(container) || { top: Infinity, bottom: -Infinity };
+    group.top = Math.min(group.top, relativeTop);
+    group.bottom = Math.max(group.bottom, relativeBottom);
+    highlightGroups.set(container, group);
+  });
+
+  highlightGroups.forEach((group, container) => {
+    const padding = 28;
+    const viewTop = container.scrollTop;
+    const viewBottom = viewTop + container.clientHeight;
+    if (group.top >= viewTop + padding && group.bottom <= viewBottom - padding) return;
+
+    const highlightHeight = group.bottom - group.top;
+    const targetTop = highlightHeight + (padding * 2) <= container.clientHeight
+      ? group.top - ((container.clientHeight - highlightHeight) / 2)
+      : group.top - padding;
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTo({
+      top: clamp(Math.round(targetTop), 0, maxScrollTop),
+      behavior: "smooth",
+    });
+  });
 }
 
 function renderTitleSection() {
@@ -2445,6 +2517,7 @@ function saveNoteComposer(composer) {
   } else {
     state.annotations.push(nextAnnotation);
   }
+  delete state.deletedAnnotations[nextAnnotation.id];
   persistLocalState();
   return nextAnnotation;
 }
@@ -2489,6 +2562,7 @@ function animateCloseNoteComposer(composer) {
 
 function deleteAnnotation(annotationId) {
   state.annotations = state.annotations.filter((note) => note.id !== annotationId);
+  state.deletedAnnotations[annotationId] = new Date().toISOString();
   if (state.noteComposer?.editingId === annotationId) {
     state.noteComposer = null;
     state.noteComposerOpening = null;
@@ -2807,7 +2881,10 @@ function snapToLineUnit(value, unit = getLineHeightUnit()) {
 }
 
 function getLineHeightUnit() {
-  const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--law-line-step"));
+  const source = IS_PRESENT_MODE
+    ? document.querySelector(".presentation-cells") || document.documentElement
+    : document.documentElement;
+  const value = Number.parseFloat(getComputedStyle(source).getPropertyValue("--law-line-step"));
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_LINE_HEIGHT_UNIT;
 }
 
@@ -3685,16 +3762,20 @@ function getUnassignedOriginalArticles() {
 
 function getSavedLineHeight(lineKey) {
   if (isMobileBondLayoutActive()) return null;
-  const unit = getLineHeightUnit();
+  const unit = DEFAULT_LINE_HEIGHT_UNIT;
   const height = Number(state.lineHeights?.[lineKey]);
   if (!Number.isFinite(height) || height <= unit) return null;
-  return Math.round(height);
+  return Math.round(height * getLineLayoutScale());
 }
 
 function getSavedLineOffset(lineKey) {
   if (isMobileBondLayoutActive()) return null;
   const offset = Number(state.lineOffsets?.[lineKey]);
-  return Number.isFinite(offset) && offset > 0 ? Math.round(offset) : null;
+  return Number.isFinite(offset) && offset > 0 ? Math.round(offset * getLineLayoutScale()) : null;
+}
+
+function getLineLayoutScale() {
+  return IS_PRESENT_MODE ? 2 : 1;
 }
 
 function cleanArticleLineEntries(article) {
@@ -4085,9 +4166,22 @@ function maskIgnoredLineStartMarkers(text) {
 }
 
 async function saveEnvironment() {
-  const payload = buildEnvironmentPayload({ includeDocuments: true });
+  await persistOpenEditorsBeforeWorkspaceSave();
+  await flushRemoteStateSaveNow();
+  const localPayload = buildEnvironmentPayload({ includeDocuments: true });
+  const serverPayload = await fetchServerState({ silent: true, apply: false });
+  const payload = serverPayload ? mergeEnvironmentPayloads(serverPayload, localPayload) : localPayload;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
   await saveBlob(blob, buildWorkspaceSaveFileName(), "application/json");
+}
+
+async function persistOpenEditorsBeforeWorkspaceSave() {
+  if (state.noteComposer?.editingId && canWriteNoteBody(state.noteComposer)) {
+    saveNoteComposer(state.noteComposer);
+  }
+  if (state.editingRevisedId && !state.editingSaving) {
+    await saveRevisedEdit(state.editingRevisedId);
+  }
 }
 
 function buildWorkspaceSaveFileName() {
@@ -4128,6 +4222,7 @@ function buildEnvironmentPayload(options = {}) {
     lineBonds: state.lineBonds,
     annotations: state.annotations.map(normalizeAnnotationForPersistence),
     annotationDefaults: state.annotationDefaults,
+    deletedAnnotations: normalizeDeletedAnnotations(state.deletedAnnotations),
     selectedRevisedId: state.selectedRevisedId,
     splitRatio: state.splitRatio,
     patchNotes: state.revisedDoc.patchNotes,
@@ -4141,6 +4236,71 @@ function normalizeAnnotationForPersistence(note) {
     isPublic: note.kind === "댓글" ? false : note.isPublic !== false,
     highlights: normalizeNoteHighlights(note.highlights),
   };
+}
+
+function normalizeDeletedAnnotations(deletedAnnotations) {
+  if (!deletedAnnotations || typeof deletedAnnotations !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(deletedAnnotations)
+      .filter(([id, deletedAt]) => id && typeof deletedAt === "string" && deletedAt)
+      .map(([id, deletedAt]) => [id, deletedAt]),
+  );
+}
+
+function mergeEnvironmentPayloads(serverPayload, localPayload) {
+  const merged = {
+    ...localPayload,
+    ...serverPayload,
+  };
+  merged.annotations = mergeAnnotationPayloads(serverPayload, localPayload);
+  merged.deletedAnnotations = mergeDeletedAnnotationPayloads(serverPayload, localPayload);
+  return merged;
+}
+
+function mergeAnnotationPayloads(serverPayload, localPayload) {
+  const deletedAnnotations = mergeDeletedAnnotationPayloads(serverPayload, localPayload);
+  const byId = new Map();
+  const pushNote = (note) => {
+    if (!note?.id) return;
+    const normalized = normalizeAnnotationForPersistence(note);
+    const existing = byId.get(normalized.id);
+    if (!existing || compareAnnotationTimestamp(normalized, existing) >= 0) {
+      byId.set(normalized.id, normalized);
+    }
+  };
+  (serverPayload?.annotations || []).forEach(pushNote);
+  (localPayload?.annotations || []).forEach(pushNote);
+
+  const orderedIds = [
+    ...(serverPayload?.annotations || []).map((note) => note.id),
+    ...(localPayload?.annotations || []).map((note) => note.id),
+  ];
+  return [...new Set(orderedIds)]
+    .map((id) => byId.get(id))
+    .filter((note) => note && !isAnnotationDeletedByTombstone(note, deletedAnnotations));
+}
+
+function mergeDeletedAnnotationPayloads(serverPayload, localPayload) {
+  const merged = {};
+  [serverPayload?.deletedAnnotations, localPayload?.deletedAnnotations].forEach((deletedAnnotations) => {
+    Object.entries(normalizeDeletedAnnotations(deletedAnnotations)).forEach(([id, deletedAt]) => {
+      if (!merged[id] || deletedAt > merged[id]) merged[id] = deletedAt;
+    });
+  });
+  return merged;
+}
+
+function compareAnnotationTimestamp(first, second) {
+  return getAnnotationTimestamp(first).localeCompare(getAnnotationTimestamp(second));
+}
+
+function getAnnotationTimestamp(note) {
+  return String(note?.updatedAt || note?.createdAt || "");
+}
+
+function isAnnotationDeletedByTombstone(note, deletedAnnotations) {
+  const deletedAt = deletedAnnotations?.[note.id];
+  return Boolean(deletedAt && deletedAt >= getAnnotationTimestamp(note));
 }
 
 function getEditRequestHeaders() {
@@ -4158,9 +4318,11 @@ async function fetchServerState(options = {}) {
     if (!response.ok) throw new Error("서버 상태를 가져오지 못했습니다.");
     const payload = await response.json();
     lastServerRevision = Number(payload.serverRevision) || lastServerRevision;
-    isApplyingRemoteState = true;
-    applyEnvironmentPayload(payload, { persist: false });
-    isApplyingRemoteState = false;
+    if (options.apply !== false) {
+      isApplyingRemoteState = true;
+      applyEnvironmentPayload(payload, { persist: false });
+      isApplyingRemoteState = false;
+    }
     return payload;
   } catch (error) {
     isApplyingRemoteState = false;
@@ -4222,7 +4384,37 @@ function scheduleRemoteStateSave() {
   remoteSaveTimer = window.setTimeout(pushStateToServer, 180);
 }
 
-async function pushStateToServer() {
+async function flushRemoteStateSaveNow() {
+  if (!REALTIME_ENABLED || !IS_EDIT_MODE) return;
+  window.clearTimeout(remoteSaveTimer);
+  if (remoteSaveInFlight) {
+    remoteSavePending = true;
+    await waitForRemoteSaveIdle();
+  }
+  window.clearTimeout(remoteSaveTimer);
+  await pushStateToServer();
+  await waitForRemoteSaveIdle();
+}
+
+function waitForRemoteSaveIdle(timeout = 5000) {
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!remoteSaveInFlight && !remoteSavePending) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt >= timeout) {
+        resolve();
+        return;
+      }
+      window.setTimeout(check, 50);
+    };
+    check();
+  });
+}
+
+async function pushStateToServer(options = {}) {
   if (!state.originalDoc || !state.revisedDoc || !IS_EDIT_MODE) return;
   if (remoteSaveInFlight) {
     remoteSavePending = true;
@@ -4231,9 +4423,11 @@ async function pushStateToServer() {
   remoteSaveInFlight = true;
   try {
     const payload = buildEnvironmentPayload({ includeDocuments: true });
+    const headers = { "Content-Type": "application/json", ...getEditRequestHeaders() };
+    if (options.replace) headers["X-PromeLaw-State-Mode"] = "replace";
     const response = await fetch("/api/state", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...getEditRequestHeaders() },
+      headers,
       body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error("서버 상태 저장에 실패했습니다.");
@@ -4254,9 +4448,11 @@ async function loadEnvironment(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   const payload = JSON.parse(await file.text());
-  applyEnvironmentPayload(payload);
+  await flushRemoteStateSaveNow();
+  applyEnvironmentPayload(payload, { remote: false });
+  await pushStateToServer({ replace: true });
   event.target.value = "";
-  showToast("저장된 대응 환경을 불러왔습니다.");
+  showToast("저장된 대응 환경을 서버에 복구했습니다.");
 }
 
 function applyEnvironmentPayload(payload, options = {}) {
@@ -4275,6 +4471,7 @@ function applyEnvironmentPayload(payload, options = {}) {
     ? payload.annotations.filter((note) => note?.id && note?.targetId && note?.kind).map(normalizeAnnotationForPersistence)
     : [];
   state.annotationDefaults = normalizeAnnotationDefaults(payload.annotationDefaults);
+  state.deletedAnnotations = normalizeDeletedAnnotations(payload.deletedAnnotations);
   state.noteComposer = null;
   state.noteComposerOpening = null;
   state.noteComposerClosing = null;
@@ -4288,7 +4485,7 @@ function applyEnvironmentPayload(payload, options = {}) {
   if (Array.isArray(payload.plusNotes)) {
     mergePlusNotes(payload.plusNotes);
   }
-  if (options.persist !== false) persistLocalState();
+  if (options.persist !== false) persistLocalState({ remote: options.remote !== false });
   renderAll();
 }
 
@@ -4424,7 +4621,8 @@ function isPristineServerPayload(payload) {
     && !Object.keys(payload?.alignments || {}).length
     && !(payload?.deletedRows || []).length
     && !(payload?.lineBonds || []).length
-    && !(payload?.annotations || []).length;
+    && !(payload?.annotations || []).length
+    && !Object.keys(payload?.deletedAnnotations || {}).length;
 }
 
 function hasMeaningfulLocalPayload(payload) {
@@ -4435,15 +4633,16 @@ function hasMeaningfulLocalPayload(payload) {
       || (payload.deletedRows || []).length
       || (payload.lineBonds || []).length
       || (payload.annotations || []).length
+      || Object.keys(payload.deletedAnnotations || {}).length
     ),
   );
 }
 
-function persistLocalState() {
+function persistLocalState(options = {}) {
   if (!state.originalDoc || !state.revisedDoc) return;
   if (IS_EDIT_MODE) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(buildEnvironmentPayload()));
-    scheduleRemoteStateSave();
+    if (options.remote !== false) scheduleRemoteStateSave();
   }
 }
 

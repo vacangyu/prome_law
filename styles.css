@@ -2327,7 +2327,7 @@ body.is-present-mode .alignment-board {
 .presentation-shell {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 7fr) minmax(0, 3fr);
   min-height: calc(100vh - var(--top-nav-height));
   background: #ffffff;
 }
@@ -2350,6 +2350,10 @@ body.is-present-mode .alignment-board {
 }
 
 .presentation-cells {
+  --law-line-step: 46px;
+  --law-text-gutter: 64px;
+  --law-code-gap: 12px;
+  --law-line-inline-padding: 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   min-height: 0;
@@ -2359,11 +2363,26 @@ body.is-present-mode .alignment-board {
 
 .presentation-cells .article-slot {
   min-height: 0;
+  overscroll-behavior: contain;
   overflow: auto;
 }
 
 .presentation-cells .article-card {
-  min-height: 100%;
+  min-height: auto;
+}
+
+.presentation-cells .law-text {
+  font-size: 28px;
+}
+
+.presentation-cells .law-line-number {
+  font-size: 20px;
+  line-height: var(--law-line-step);
+}
+
+.presentation-cells .law-line-content {
+  line-height: var(--law-line-step);
+  overflow: visible;
 }
 
 .presentation-note {
@@ -2398,6 +2417,38 @@ body.is-present-mode .alignment-board {
   white-space: pre-wrap;
   word-break: keep-all;
   overflow-wrap: anywhere;
+}
+
+.presentation-note-indicators {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.presentation-note-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: #d0d7de;
+  box-shadow: 0 0 0 0 rgba(9, 105, 218, 0);
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.presentation-note-dot:hover,
+.presentation-note-dot:focus-visible {
+  background: #6e7781;
+  outline: none;
+}
+
+.presentation-note-dot.is-active {
+  background: #0969da;
+  box-shadow: 0 0 0 4px rgba(9, 105, 218, 0.14);
+  transform: scale(1.12);
 }
 
 .presentation-nav {

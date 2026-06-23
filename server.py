@@ -141,10 +141,21 @@ def normalize_annotation(note):
     return normalized
 
 
+def normalize_deleted_annotations(payload):
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(annotation_id): str(deleted_at)
+        for annotation_id, deleted_at in payload.items()
+        if annotation_id and isinstance(deleted_at, str) and deleted_at
+    }
+
+
 def normalize_payload(payload):
     normalized = dict(payload)
     annotations = normalized.get("annotations")
     normalized["annotations"] = [normalize_annotation(note) for note in annotations] if isinstance(annotations, list) else []
+    normalized["deletedAnnotations"] = normalize_deleted_annotations(normalized.get("deletedAnnotations"))
     return normalized
 
 
@@ -157,6 +168,7 @@ def viewer_payload(payload):
     for note in public_payload["annotations"]:
         note.pop("author", None)
     public_payload["annotationDefaults"] = {}
+    public_payload["deletedAnnotations"] = {}
     return public_payload
 
 
@@ -193,6 +205,7 @@ def initial_payload():
         "lineBonds": [],
         "annotations": [],
         "annotationDefaults": {},
+        "deletedAnnotations": {},
         "selectedRevisedId": None,
         "splitRatio": 50,
         "patchNotes": [],
@@ -223,11 +236,77 @@ def load_state_payload():
     return initial_payload()
 
 
-def save_state_payload(payload):
+def annotation_timestamp(note):
+    return str(note.get("updatedAt") or note.get("createdAt") or "")
+
+
+def merge_deleted_annotations(current_payload, incoming_payload):
+    merged = {}
+    for deleted_annotations in (
+        current_payload.get("deletedAnnotations"),
+        incoming_payload.get("deletedAnnotations"),
+    ):
+        for annotation_id, deleted_at in normalize_deleted_annotations(deleted_annotations).items():
+            if annotation_id not in merged or deleted_at > merged[annotation_id]:
+                merged[annotation_id] = deleted_at
+    return merged
+
+
+def is_annotation_deleted(note, deleted_annotations):
+    deleted_at = deleted_annotations.get(note.get("id"))
+    return bool(deleted_at and deleted_at >= annotation_timestamp(note))
+
+
+def merge_annotations(current_payload, incoming_payload):
+    deleted_annotations = merge_deleted_annotations(current_payload, incoming_payload)
+    by_id = {}
+
+    def put(note):
+        if not isinstance(note, dict) or not note.get("id"):
+            return
+        normalized = normalize_annotation(note)
+        existing = by_id.get(normalized["id"])
+        if not existing or annotation_timestamp(normalized) >= annotation_timestamp(existing):
+            by_id[normalized["id"]] = normalized
+
+    for note in current_payload.get("annotations", []):
+        put(note)
+    for note in incoming_payload.get("annotations", []):
+        put(note)
+
+    ordered_ids = []
+    for note in incoming_payload.get("annotations", []) + current_payload.get("annotations", []):
+        annotation_id = note.get("id") if isinstance(note, dict) else None
+        if annotation_id and annotation_id not in ordered_ids:
+            ordered_ids.append(annotation_id)
+
+    return [
+        by_id[annotation_id]
+        for annotation_id in ordered_ids
+        if annotation_id in by_id and not is_annotation_deleted(by_id[annotation_id], deleted_annotations)
+    ]
+
+
+def merge_state_payload(current_payload, incoming_payload, preserve_documents=True):
+    current = normalize_payload(current_payload)
+    incoming = normalize_payload(incoming_payload)
+    merged = dict(incoming)
+    if preserve_documents:
+        merged["files"] = current.get("files", incoming.get("files", {}))
+        merged["documents"] = current.get("documents", incoming.get("documents", {}))
+    merged["annotations"] = merge_annotations(current, incoming)
+    merged["deletedAnnotations"] = merge_deleted_annotations(current, incoming)
+    return normalize_payload(merged)
+
+
+def save_state_payload(payload, merge=True, preserve_documents=True):
     global server_revision
     with state_condition:
         server_revision += 1
-        next_payload = normalize_payload(payload)
+        if merge:
+            next_payload = merge_state_payload(load_state_payload(), payload, preserve_documents=preserve_documents)
+        else:
+            next_payload = normalize_payload(payload)
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         next_payload["serverSavedAt"] = now
         next_payload["serverRevision"] = server_revision
@@ -250,7 +329,7 @@ def update_revised_markdown(text):
     payload.setdefault("files", {}).setdefault("revised", {})["name"] = REVISED_FILE_NAME
     payload["files"]["revised"]["hash"] = hash_text(text)
     payload["files"]["revised"]["text"] = text
-    return save_state_payload(payload)
+    return save_state_payload(payload, preserve_documents=False)
 
 
 def initialize_revision():
@@ -331,7 +410,8 @@ class PromeLawHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body()
             if not isinstance(payload, dict):
                 raise ValueError("상태 JSON이 필요합니다.")
-            revision = save_state_payload(payload)
+            replace_state = self.headers.get("X-PromeLaw-State-Mode", "").lower() == "replace"
+            revision = save_state_payload(payload, merge=not replace_state)
             self.send_json({"ok": True, "revision": revision})
         except Exception as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
