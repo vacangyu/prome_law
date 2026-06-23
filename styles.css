@@ -164,6 +164,19 @@ body.is-present-mode .top-nav {
   display: none;
 }
 
+.commit-ref {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  padding: 0 4px 0 0;
+  color: #6e7781;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 .icon-button {
   display: inline-grid;
   place-items: center;
@@ -2656,6 +2669,13 @@ body.is-present-mode .alignment-board {
     gap: 10px;
     border-radius: 8px;
     padding: 0 12px;
+  }
+
+  .toolbar .commit-ref {
+    min-height: 30px;
+    padding: 0 8px 4px;
+    border-bottom: 1px solid rgba(208, 215, 222, 0.64);
+    font-size: 10px;
   }
 
   .toolbar .icon-button svg {

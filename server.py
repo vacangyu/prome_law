@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import secrets
+import subprocess
 import tempfile
 import threading
 import time
@@ -24,9 +25,11 @@ REVISED_FILE = ROOT / REVISED_FILE_NAME
 STATE_FILE = DATA_ROOT / ".prome-law-state.json"
 EDIT_TOKEN_FILE = DATA_ROOT / ".prome-law-edit-token"
 SEED_STATE_FILE = ROOT / "seed-state.json"
+VERSION_FILE = ROOT / "version.json"
 
 state_condition = threading.Condition()
 server_revision = 0
+SERVER_STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def hash_text(text):
@@ -55,6 +58,65 @@ def atomic_write_text(path, text):
 
 def atomic_write_json(path, payload):
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def run_git(args):
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def read_version_file():
+    if not VERSION_FILE.exists():
+        return {}
+    try:
+        payload = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def get_version_payload():
+    file_payload = read_version_file()
+    commit = (
+        os.environ.get("PROME_LAW_COMMIT", "").strip()
+        or os.environ.get("RENDER_GIT_COMMIT", "").strip()
+        or file_payload.get("commit", "")
+        or run_git(["rev-parse", "HEAD"])
+    )
+    committed_at = (
+        os.environ.get("PROME_LAW_COMMITTED_AT", "").strip()
+        or file_payload.get("committedAt", "")
+        or run_git(["show", "-s", "--format=%cI", commit or "HEAD"])
+    )
+    pushed_at = (
+        os.environ.get("PROME_LAW_PUSHED_AT", "").strip()
+        or file_payload.get("pushedAt", "")
+    )
+    built_at = (
+        os.environ.get("PROME_LAW_BUILT_AT", "").strip()
+        or file_payload.get("builtAt", "")
+    )
+    source = file_payload.get("source") or ("git" if run_git(["rev-parse", "--is-inside-work-tree"]) == "true" else "runtime")
+    return {
+        "commit": commit,
+        "shortCommit": commit[:7] if commit else "",
+        "commitUrl": file_payload.get("commitUrl", ""),
+        "committedAt": committed_at,
+        "pushedAt": pushed_at,
+        "builtAt": built_at,
+        "serverStartedAt": SERVER_STARTED_AT,
+        "source": source,
+    }
 
 
 def get_edit_token():
@@ -225,6 +287,10 @@ class PromeLawHandler(SimpleHTTPRequestHandler):
         if path == "/api/state":
             payload = load_state_payload()
             self.send_json(payload if self.is_edit_request(parsed) else viewer_payload(payload))
+            return
+
+        if path == "/api/version":
+            self.send_json(get_version_payload())
             return
 
         if path == "/api/events":

@@ -161,6 +161,7 @@ async function init() {
   syncTopNavHeight();
   syncResponsiveLayoutMode();
   bindEvents();
+  loadVersionInfo();
   renderChips();
   await loadDocuments();
   await restoreLocalState();
@@ -222,6 +223,7 @@ function cacheElements() {
   els.columnDivider = document.querySelector("#columnDivider");
   els.mobileMenuButton = document.querySelector("#mobileMenuButton");
   els.headerActions = document.querySelector("#headerActions");
+  els.commitRef = document.querySelector("#commitRef");
 }
 
 function bindEvents() {
@@ -278,6 +280,49 @@ function handlePresentationKeydown(event) {
     event.preventDefault();
     movePresentationSlide(1);
   }
+}
+
+async function loadVersionInfo() {
+  if (!IS_EDIT_MODE || !els.commitRef) return;
+  try {
+    const response = await fetch("/api/version", { cache: "no-store" });
+    if (!response.ok) throw new Error("version unavailable");
+    const version = await response.json();
+    renderCommitRef(version);
+  } catch {
+    els.commitRef.hidden = false;
+    els.commitRef.textContent = "last commit ref: 확인 불가";
+  }
+}
+
+function renderCommitRef(version) {
+  const ref = version.shortCommit || (version.commit ? String(version.commit).slice(0, 7) : "");
+  const timeValue = version.pushedAt || version.committedAt || version.builtAt || version.serverStartedAt || "";
+  const timeText = formatVersionTime(timeValue);
+  const label = ref ? `last commit ref: ${ref}` : "last commit ref: unknown";
+  els.commitRef.hidden = false;
+  els.commitRef.textContent = timeText ? `${label} · ${timeText}` : label;
+  els.commitRef.title = [
+    version.commit ? `commit: ${version.commit}` : "",
+    version.pushedAt ? `pushed: ${version.pushedAt}` : "",
+    version.committedAt ? `committed: ${version.committedAt}` : "",
+    version.builtAt ? `built: ${version.builtAt}` : "",
+    version.serverStartedAt ? `server started: ${version.serverStartedAt}` : "",
+    version.source ? `source: ${version.source}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function formatVersionTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function openViewerPrintPage() {
