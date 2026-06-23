@@ -170,6 +170,10 @@ body.is-present-mode .article-card.original {
   cursor: default;
 }
 
+body.is-print-page .annotation-highlight-preview {
+  display: none !important;
+}
+
 .mobile-menu-button {
   display: none;
 }
@@ -2339,7 +2343,7 @@ body.is-present-mode .alignment-board {
 .presentation-shell {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 7fr) minmax(0, 3fr);
+  grid-template-rows: 48px minmax(0, 7fr) minmax(0, 3fr);
   height: 100%;
   min-height: 0;
   background: #ffffff;
@@ -2361,7 +2365,13 @@ body.is-present-mode .alignment-board {
 }
 
 .presentation-context-band {
-  top: calc(var(--top-nav-height) - var(--chapter-sticky-overlap));
+  position: static;
+  top: auto;
+  z-index: 1;
+  height: 48px;
+  min-height: 48px;
+  margin-top: 0;
+  box-shadow: none;
 }
 
 .presentation-cells {
@@ -2406,13 +2416,15 @@ body.is-present-mode .alignment-board {
 
 .presentation-note {
   display: grid;
-  align-content: center;
-  gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
+  gap: 10px;
+  height: 100%;
   min-height: 0;
-  padding: 30px 88px;
+  padding: 18px 88px 20px;
   background: #fbfdff;
   color: #24292f;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .presentation-note-meta {
@@ -2428,11 +2440,12 @@ body.is-present-mode .alignment-board {
 
 .presentation-note p {
   margin: 0;
-  max-width: 1040px;
+  max-width: none;
   color: #24292f;
-  font-size: clamp(26px, 4vw, 54px);
+  font-size: clamp(22px, 3.2vw, 42px);
   font-weight: 700;
   line-height: 1.28;
+  overflow: auto;
   white-space: pre-wrap;
   word-break: keep-all;
   overflow-wrap: anywhere;
@@ -2715,12 +2728,24 @@ body.is-present-mode .alignment-board {
   .annotation-reason .annotation-highlight-preview {
     grid-column: 1 / -1;
     justify-self: start;
-    padding: 1px 0 0;
-    font-weight: 700;
+    margin-top: 4px;
+    padding: 4px 0 0;
+    color: #8c959f;
+    font-weight: 500;
     text-align: left;
-    text-decoration: underline;
-    text-decoration-thickness: 1px;
-    text-underline-offset: 3px;
+    text-decoration: none;
+  }
+
+  body.is-viewer-mode .annotation-item,
+  body.is-viewer-mode .annotation-body {
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  body.is-viewer-mode .annotation-highlight-preview {
+    pointer-events: none;
   }
 
   .annotation-highlight-preview-desktop {
@@ -2836,6 +2861,7 @@ body.is-present-mode .alignment-board {
   .annotation-actions,
   .note-add-row-button,
   .annotation-public-badge,
+  .annotation-highlight-preview,
   .line-lock-button {
     display: none !important;
   }

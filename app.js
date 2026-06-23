@@ -156,6 +156,7 @@ async function init() {
   document.body.classList.toggle("is-edit-mode", IS_EDIT_MODE);
   document.body.classList.toggle("is-viewer-mode", !IS_EDIT_MODE && !IS_PRESENT_MODE);
   document.body.classList.toggle("is-present-mode", IS_PRESENT_MODE);
+  document.body.classList.toggle("is-print-page", isPrintView());
   updatePageTitle();
   restoreDeviceAuthor();
   syncViewportGeometry();
@@ -173,14 +174,14 @@ async function init() {
   renderAll();
   connectRealtime();
   maybeAutoPrintViewer();
-  showToast("회칙 파일을 읽었습니다.");
+  if (!isPrintView()) showToast("회칙 파일을 읽었습니다.");
 }
 
 function updatePageTitle() {
   const title = IS_EDIT_MODE
     ? "프로메테우스 회칙 개정안 검토"
     : IS_PRESENT_MODE
-      ? "프로메테우스 회칙 개정안 발표"
+      ? "프로메테우스 회칙 개정안"
       : "프로메테우스 회칙 개정안";
   document.title = title;
   document.querySelector(".brand-block h1").textContent = title;
@@ -345,8 +346,12 @@ function openPresentationPage() {
 
 function maybeAutoPrintViewer() {
   if (IS_EDIT_MODE || IS_PRESENT_MODE) return;
-  if (!new URLSearchParams(window.location.search).has("print")) return;
+  if (!isPrintView()) return;
   window.setTimeout(() => window.print(), 450);
+}
+
+function isPrintView() {
+  return new URLSearchParams(window.location.search).has("print");
 }
 
 function handleHighlightSelection() {
@@ -2133,6 +2138,7 @@ function bindAnnotationHighlightPreviewEvents() {
   document.querySelectorAll(".annotation-item").forEach((item) => {
     item.addEventListener("mouseenter", () => {
       const annotationId = item.dataset.annotationId;
+      if (isPrintView()) return;
       if (!isDesktopHighlightPreviewMode()) return;
       if (hasNoteHighlights(state.annotations.find((note) => note.id === annotationId))) {
         setHighlightPreview(annotationId);
@@ -2140,6 +2146,13 @@ function bindAnnotationHighlightPreviewEvents() {
     });
     item.addEventListener("mouseleave", () => {
       if (isDesktopHighlightPreviewMode()) clearHighlightPreview(item.dataset.annotationId);
+    });
+    item.addEventListener("pointerdown", (event) => {
+      if (isPrintView() || isDesktopHighlightPreviewMode()) return;
+      const annotationId = item.dataset.annotationId;
+      if (!hasNoteHighlights(state.annotations.find((note) => note.id === annotationId))) return;
+      event.stopPropagation();
+      previewAnnotationHighlight(annotationId);
     });
   });
   document.querySelectorAll("[data-preview-highlight]").forEach((button) => {
