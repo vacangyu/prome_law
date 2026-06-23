@@ -1171,6 +1171,11 @@ function renderPresentationNoteIndicators(activeNote, notes) {
 
 function getPresentationContextText(note) {
   if (note.targetId === TITLE_REVISED_ID) return "제목";
+  const deletedRow = getDeletedRowFromNoteTarget(note.targetId);
+  if (deletedRow) {
+    const originalArticle = findOriginalArticle(deletedRow.originalArticleId);
+    if (originalArticle) return `${formatPresentationChapter(originalArticle.chapter)} - ${formatPresentationArticle(originalArticle)}`;
+  }
   const article = findRevisedArticle(note.targetId);
   if (!article) return "대상 조문 없음";
   return `${formatPresentationChapter(article.chapter)} - ${formatPresentationArticle(article)}`;
@@ -1201,6 +1206,9 @@ function renderPresentationCellPair(note) {
     `;
   }
 
+  const deletedRow = getDeletedRowFromNoteTarget(note.targetId);
+  if (deletedRow) return renderPresentationDeletedOriginalPair(deletedRow);
+
   const revisedArticle = findRevisedArticle(note.targetId);
   if (!revisedArticle) return `<div class="presentation-missing">대상 조문을 찾을 수 없습니다.</div>`;
   const alignment = getAlignment(revisedArticle.id);
@@ -1211,6 +1219,27 @@ function renderPresentationCellPair(note) {
   return `
     <div class="article-slot">${originals.map((article) => renderOriginalArticleCard(article, revisedArticle.id, buildLineRenderDiff(cleanArticleLines(article), revisedText).oldLines)).join("")}</div>
     <div class="article-slot">${renderRevisedArticleCard(revisedArticle, revisedDiff.newLines)}</div>
+  `;
+}
+
+function renderPresentationDeletedOriginalPair(row) {
+  const article = findOriginalArticle(row.originalArticleId);
+  if (!article) return `<div class="presentation-missing">삭제된 원본 조문을 찾을 수 없습니다.</div>`;
+
+  const removedLines = cleanArticleLines(article).map((line) => renderWholeChangedLine(line, "removed"));
+  const minHeight = Math.max(72, row.height || 72);
+  const virtualLineKey = `virtual:${row.id}:1`;
+
+  return `
+    <div class="article-slot deleted-original-slot" style="min-height: ${minHeight}px">
+      ${renderOriginalArticleCard(article, row.beforeRevisedId, removedLines)}
+    </div>
+    <div class="article-slot virtual-revised-slot" style="min-height: ${minHeight}px" aria-label="대응되는 신규 개정안 없음">
+      <section class="article-card revised virtual-revised-card" style="min-height: ${minHeight}px">
+        ${renderRevisedDummyHandle()}
+        <div class="law-text">${renderLawLines([""], [], { lineNumbers: allocateRenderLineNumbers("revised", 1), lineKeys: [virtualLineKey] })}</div>
+      </section>
+    </div>
   `;
 }
 
@@ -1495,6 +1524,12 @@ function renderRevisedDummyHandle(extraClass = "") {
 
 function getDeletedRowNoteTarget(rowId) {
   return `deleted:${rowId}`;
+}
+
+function getDeletedRowFromNoteTarget(targetId) {
+  if (typeof targetId !== "string" || !targetId.startsWith("deleted:")) return null;
+  const rowId = targetId.slice("deleted:".length);
+  return state.deletedRows.find((row) => row.id === rowId) || null;
 }
 
 function renderRowAnnotationPanel(targetId) {
