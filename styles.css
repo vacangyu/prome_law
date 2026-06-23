@@ -151,11 +151,6 @@ body.is-present-mode .article-card.original {
   cursor: default;
 }
 
-body.is-viewer-mode .top-nav,
-body.is-present-mode .top-nav {
-  justify-content: center;
-}
-
 .mobile-menu-button {
   display: none;
 }

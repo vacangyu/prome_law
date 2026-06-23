@@ -1654,15 +1654,9 @@ function getActiveHighlightRangesForLine(lineKey) {
 }
 
 function getActiveHighlightNoteIds() {
-  if (IS_EDIT_MODE) {
-    return [...new Set([
-      ...state.annotations.filter(hasNoteHighlights).map((note) => note.id),
-      ...(hasNoteHighlights(state.noteComposer) ? [state.noteComposer.editingId] : []),
-    ].filter(Boolean))];
-  }
   const ids = [];
   if (state.highlightPreviewNoteId) ids.push(state.highlightPreviewNoteId);
-  if (state.noteComposer?.highlightMode && state.noteComposer.editingId) ids.push(state.noteComposer.editingId);
+  if (state.noteComposer?.editingId) ids.push(state.noteComposer.editingId);
   if (IS_PRESENT_MODE) {
     const note = getPresentationNotes()[state.presentationIndex];
     if (note?.id) ids.push(note.id);
@@ -1932,13 +1926,13 @@ function bindBoardEvents() {
   document.querySelectorAll(".annotation-item").forEach((item) => {
     item.addEventListener("mouseenter", () => {
       const annotationId = item.dataset.annotationId;
-      if (IS_EDIT_MODE || !isDesktopHighlightPreviewMode()) return;
+      if (!isDesktopHighlightPreviewMode()) return;
       if (hasNoteHighlights(state.annotations.find((note) => note.id === annotationId))) {
         setHighlightPreview(annotationId);
       }
     });
     item.addEventListener("mouseleave", () => {
-      if (!IS_EDIT_MODE && isDesktopHighlightPreviewMode()) clearHighlightPreview(item.dataset.annotationId);
+      if (isDesktopHighlightPreviewMode()) clearHighlightPreview(item.dataset.annotationId);
     });
     item.addEventListener("click", (event) => {
       event.stopPropagation();
